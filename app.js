@@ -3,7 +3,7 @@
 'use strict';
 
 /* ---------- Constantes ---------- */
-var VERSION = '1.0';
+var VERSION = '1.1';
 var PROFILS = {
   kevin: { id: 'kevin', nom: 'Kévin', init: 'K', acc: '#2F56E0', ring: '#3D6BFF', soft: '#E3EAFF', ink: '#1E3FB0', pale: '#C9D6FF' },
   susan: { id: 'susan', nom: 'Susan', init: 'S', acc: '#C2401F', ring: '#FF7A55', soft: '#FFE4DC', ink: '#9A3216', pale: '#FFC9B8' }
@@ -19,7 +19,7 @@ var PROGRAMMES = [
 ];
 var VMIN = 1, VMAX = 18, PMIN = 0, PMAX = 10;
 var LS = {
-  profil: 'foulee:profil', code: 'foulee:code', outbox: 'foulee:outbox', sync: 'foulee:sync',
+  profil: 'foulee:profil', code: 'foulee:code', outbox: 'foulee:outbox', sync: 'foulee:sync', live: 'foulee:live',
   data: function (p) { return 'foulee:data:' + p; }, offset: function (p, prog) { return 'foulee:offset:' + p + ':' + prog; }
 };
 var API_URL = (window.FOULEE_CONFIG && window.FOULEE_CONFIG.apiUrl) || '';
@@ -99,7 +99,8 @@ function appliquerOp(db, o) {
   if (i >= 0) arr[i] = Object.assign({}, arr[i], o.row); else arr.push(Object.assign({}, o.row));
 }
 function commit(op) {
-  op.profil = profil.id;
+  op.profil = profil.id; op.uid = uid();
+  if (op.row) op.row.profil = profil.id;
   appliquerOp(DB, op); sauverDB();
   var ob = outbox(); ob.push(op); jset(LS.outbox, ob);
   flush();
@@ -109,35 +110,79 @@ function api(fn, args) {
     .then(function (r) { return r.json(); })
     .then(function (j) { if (!j.ok) throw new Error(j.error || 'Erreur serveur'); return j.result; });
 }
+function stable(o) {
+  if (Array.isArray(o)) return '[' + o.map(stable).join(',') + ']';
+  if (o && typeof o === 'object') return '{' + Object.keys(o).sort().filter(function (k) { return o[k] !== null && o[k] !== '' && o[k] !== undefined; })
+    .map(function (k) { return JSON.stringify(k) + ':' + stable(o[k]); }).join(',') + '}';
+  return JSON.stringify(o);
+}
+function dbSig(db) {
+  function sig(arr) { return arr.slice().sort(function (x, y) { return String(x.id).localeCompare(String(y.id)); }).map(stable).join('|'); }
+  return sig(db.seances) + '#' + sig(db.modeles);
+}
+var retry = { n: 0, timer: null };
+function planifierFlush(ms) { clearTimeout(retry.timer); retry.timer = setTimeout(flush, ms); }
 function flush() {
-  if (!API_URL || !profil || syncState.busy) return Promise.resolve();
+  if (!API_URL || !profil) return Promise.resolve();
+  if (syncState.busy) { syncState.again = true; return syncState.promise || Promise.resolve(); }
   var code = localStorage.getItem(LS.code) || '';
   if (!code) return Promise.resolve();
   var p = profil.id;
   var mine = outbox().filter(function (o) { return o.profil === p; });
-  var sent = mine.length;
-  syncState.busy = true;
-  return api('sync', [code, p, mine.map(function (o) { return o.op === 'del' ? { op: 'del', t: o.t, id: o.id } : { op: 'put', t: o.t, row: o.row }; })])
+  var sent = mine.map(function (o) { return o.uid; });
+  syncState.busy = true; syncState.again = false;
+  syncState.promise = withTimeout(api('sync', [code, p, mine.map(function (o) { return o.op === 'del' ? { op: 'del', t: o.t, id: o.id } : { op: 'put', t: o.t, row: o.row }; })]), 25000)
     .then(function (res) {
-      var ob = outbox(), n = 0;
-      ob = ob.filter(function (o) { if (o.profil === p && n < sent) { n++; return false; } return true; });
+      var ob = outbox().filter(function (o) { return sent.indexOf(o.uid) < 0; });
       jset(LS.outbox, ob);
       if (profil && profil.id === p) {
         var db = { seances: res.seances || [], modeles: res.modeles || [] };
         ob.filter(function (o) { return o.profil === p; }).forEach(function (o) { appliquerOp(db, o); });
+        var change = dbSig(db) !== dbSig(DB);
         DB = db; sauverDB();
         syncState.last = Date.now(); jset(LS.sync + ':' + p, syncState.last);
+        if (change) rafraichir();
       }
-      syncState.error = '';
+      syncState.error = ''; retry.n = 0;
     })
-    .catch(function (e) { syncState.error = e.message || String(e); })
+    .catch(function (e) {
+      syncState.error = /refusé/.test(e.message || '') ? e.message : 'Pas de réseau ou serveur injoignable, nouvel essai automatique.';
+      if (!/refusé/.test(e.message || '')) { retry.n++; planifierFlush(Math.min(60000, 2000 * Math.pow(2, retry.n - 1))); }
+    })
     .then(function () {
       syncState.busy = false;
-      if (route.name !== 'live' && route.name !== 'profil') render();
-      if (outbox().some(function (o) { return o.profil === p; }) && !syncState.error) setTimeout(flush, 1000);
+      if (route.name === 'reglages') rafraichir();
+      if (syncState.again || outbox().some(function (o) { return o.profil === p; }) && !syncState.error) planifierFlush(300);
     });
+  return syncState.promise;
 }
-window.addEventListener('online', function () { flush(); });
+/* Redessine sans gêner : jamais pendant une saisie ni pendant la séance en direct. */
+function rafraichir() {
+  if (route.name === 'live' || route.name === 'profil') return;
+  var a = document.activeElement;
+  if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) { syncState.pendingRender = true; return; }
+  var y = window.scrollY; render(); window.scrollTo(0, y);
+}
+document.addEventListener('focusout', function () { setTimeout(function () { if (syncState.pendingRender) { syncState.pendingRender = false; rafraichir(); } }, 50); });
+window.addEventListener('online', function () { retry.n = 0; flush(); });
+document.addEventListener('visibilitychange', function () {
+  if (!profil) return;
+  if (document.visibilityState === 'visible') { retry.n = 0; flush(); if (!BLE.connected && !BLE.connecting) bleConnecter(false); }
+  else envoiDeSecours();
+});
+window.addEventListener('pagehide', envoiDeSecours);
+/* À la fermeture : envoi « au cas où » (les opérations sont rejouables sans risque, par id). */
+function envoiDeSecours() {
+  if (!API_URL || !profil || !navigator.sendBeacon) return;
+  var code = localStorage.getItem(LS.code) || ''; if (!code) return;
+  var mine = outbox().filter(function (o) { return o.profil === profil.id; });
+  if (!mine.length) return;
+  try {
+    navigator.sendBeacon(API_URL, new Blob([JSON.stringify({ fn: 'sync', args: [code, profil.id, mine.map(function (o) { return o.op === 'del' ? { op: 'del', t: o.t, id: o.id } : { op: 'put', t: o.t, row: o.row }; })] })], { type: 'text/plain;charset=utf-8' }));
+  } catch (e) {}
+}
+/* Relecture régulière (autre téléphone sur le même profil). */
+setInterval(function () { if (document.visibilityState === 'visible' && route.name !== 'live') flush(); }, 45000);
 
 /* ---------- Bluetooth (FTMS) ---------- */
 var FTMS = 0x1826, HRS = 0x180D;
@@ -193,7 +238,22 @@ function brancherFtms(server) {
       return c.startNotifications(); }).catch(function () {}); });
   });
 }
-function onBleDeco() { BLE.connected = false; BLE.cp = null; BLE.hasControl = false; majBle(); if (Live.s) Live.onDeco(); }
+function onBleDeco() {
+  BLE.connected = false; BLE.cp = null; BLE.hasControl = false; majBle();
+  if (Live.s) Live.onDeco();
+  if (!BLE.manuel) reconnecter(0);
+}
+/* Le tapis a décroché : on retente seul, sans demander à l'utilisateur. */
+function reconnecter(n) {
+  if (BLE.connected || BLE.connecting || !BLE.device || n > 20) return;
+  setTimeout(function () {
+    if (BLE.connected || BLE.connecting || document.visibilityState !== 'visible') { if (!BLE.connected) reconnecter(n + 1); return; }
+    BLE.connecting = true; majBle();
+    withTimeout(BLE.device.gatt.connect(), 8000).then(brancherFtms)
+      .then(function () { BLE.connecting = false; BLE.connected = true; BLE.error = ''; majBle(); if (Live.s && Live.s.type === 'pilote' && Live.s.debut) Live.appliquerEtape(); })
+      .catch(function () { BLE.connecting = false; majBle(); reconnecter(n + 1); });
+  }, n === 0 ? 800 : 3000);
+}
 function onTreadmill(dv) {
   try {
     var o = 0, f = dv.getUint16(o, true); o += 2;
@@ -323,7 +383,20 @@ var Live = {
       if (st.i >= Live.etapes().length) { Live.fin('auto'); return; }
       if (st.i !== s.stepIdx) { s.stepIdx = st.i; Live.appliquerEtape(); }
     }
+    if (now - (s.saved || 0) > 4000) Live.sauver();
     if (route.name === 'live') Live.render();
+  },
+  sauver: function () {
+    var s = Live.s; if (!s) return; s.saved = Date.now();
+    var copie = Object.assign({}, s); copie.decompte = false;
+    jset(LS.live, { profil: profil.id, s: copie, savedAt: Date.now() });
+  },
+  restaurer: function () {
+    var x = jget(LS.live, null);
+    if (!x || !profil || x.profil !== profil.id || Date.now() - x.savedAt > 3 * 3600 * 1000 || !x.s) { localStorage.removeItem(LS.live); return false; }
+    Live.s = x.s; Live.s.lastTick = Date.now(); Live.s.fini = false;
+    clearInterval(Live.timer); Live.timer = setInterval(Live.tick, 500); wakeLock(true);
+    return true;
   },
   appliquerEtape: function () {
     var e = Live.etapes()[Live.s.stepIdx]; if (!e) return;
@@ -336,7 +409,7 @@ var Live = {
     s.cible[k] = val;
     if (s.debut && !s.initPending) {
       var c = { t: Math.round(s.active / 1000) }; c[k] = val;
-      s.changes.push(c);
+      s.changes.push(c); Live.sauver();
     }
   },
   onStart: function () { if (Live.s) Live.s.paused = false; },
@@ -373,10 +446,10 @@ var Live = {
   },
   vitesse: function (d) { var b = (Live.s.cible.v != null ? Live.s.cible.v : BLE.data.speed) || 0; cibleVitesse(b + d).then(function (r) { if (r !== 1) toast('Le tapis n\'a pas accepté le changement.'); }); },
   pente: function (d) { var b = (Live.s.cible.p != null ? Live.s.cible.p : BLE.data.incl) || 0; ciblePente(b + d).then(function (r) { if (r !== 1) toast('Le tapis n\'a pas accepté le changement.'); }); },
-  annuler: function () { clearInterval(Live.timer); Live.s = null; wakeLock(false); },
+  annuler: function () { clearInterval(Live.timer); Live.s = null; wakeLock(false); localStorage.removeItem(LS.live); },
   fin: function (raison) {
     var s = Live.s; if (!s || s.fini) return;
-    s.fini = true; clearInterval(Live.timer); wakeLock(false);
+    s.fini = true; clearInterval(Live.timer); wakeLock(false); localStorage.removeItem(LS.live);
     if (raison !== 'tapis' && BLE.connected && (BLE.data.speed > 0 || s.paused)) tapisStop();
     if (s.bucket.t >= 5000) s.courbe.push(Math.round(s.bucket.sum / s.bucket.t * 10) / 10);
     var duree = Math.round(s.active / 1000);
@@ -479,7 +552,7 @@ function versEtapes(changes, duree) {
 
 /* ---------- Navigation ---------- */
 var route = { name: 'profil', params: {} };
-var ui = { profilSel: null, retenir: true, resume: { mode: 'semaine', ref: new Date() }, modeleSauve: {} };
+var ui = { profilSel: null, retenir: true, resume: { mode: 'semaine', ref: new Date() }, modeleSauve: {}, nomModele: {} };
 function go(name, params) { route = { name: name, params: params || {} }; render(); window.scrollTo(0, 0); }
 var TABS = [['accueil', 'Accueil', ICON.home], ['seances', 'Séances', ICON.play], ['resume', 'Résumé', ICON.chart], ['reglages', 'Profil', ICON.user]];
 function render() {
@@ -634,7 +707,7 @@ var SCREENS = {
       (peutModele ? (sauve ? '<div class="card"><h2>Modèle enregistré</h2><p class="small muted" style="margin-top:4px">Retrouve-le dans Séances › Mes modèles : le tapis refera les mêmes changements tout seul.</p></div>'
         : '<div class="card stack" style="gap:10px"><div><h2>Enregistrer comme modèle&nbsp;?</h2><p class="small muted" style="margin-top:4px">L\'appli a noté ' + versEtapes(x.changements, x.duree).length + ' réglages de vitesse et de pente. La prochaine fois, le tapis les refera tout seul.</p></div>' +
           '<div class="bars" style="height:44px">' + barresEtapes(versEtapes(x.changements, x.duree), -1, 44) + '</div>' +
-          '<input type="text" id="nomModele" maxlength="40" placeholder="Nom du modèle" value="' + esc('Ma séance du ' + dateCourte(x.debut)) + '">' +
+          '<input type="text" id="nomModele" maxlength="40" placeholder="Nom du modèle" value="' + esc(ui.nomModele[x.id] != null ? ui.nomModele[x.id] : 'Ma séance du ' + dateCourte(x.debut)) + '">' +
           '<button data-act="save-modele" data-id="' + esc(x.id) + '">Enregistrer comme modèle</button></div>') : '') +
       '<button class="primary big full" data-act="tab" data-to="accueil">Retour à l\'accueil</button></div>';
   },
@@ -750,7 +823,7 @@ document.addEventListener('click', function (ev) {
     }
     case 'tab': go(el.dataset.to); break;
     case 'connect': bleConnecter(true); break;
-    case 'connect-new': bleConnecter(true).then(function () { render(); }); break;
+    case 'connect-new': BLE.manuel = true; if (BLE.device && BLE.device.gatt.connected) BLE.device.gatt.disconnect(); BLE.manuel = false; bleConnecter(true).then(function () { render(); }); break;
     case 'libre': Live.nouvelle({ type: 'libre' }); go('live'); if (!BLE.connected) bleConnecter(false); break;
     case 'prep': go('prep', { id: id }); break;
     case 'off': {
@@ -804,12 +877,24 @@ document.addEventListener('click', function (ev) {
   }
 });
 document.addEventListener('change', function (ev) { if (ev.target.id === 'retenir') ui.retenir = ev.target.checked; });
+document.addEventListener('input', function (ev) { if (ev.target.id === 'nomModele' && route.params.id) ui.nomModele[route.params.id] = ev.target.value; });
 
 /* ---------- Démarrage ---------- */
 chargerProfil();
-if (profil) { chargerDB(); route = { name: 'accueil', params: {} }; }
+if (profil) {
+  chargerDB(); route = { name: 'accueil', params: {} };
+  if (Live.restaurer()) { route = { name: 'live', params: {} }; setTimeout(function () { toast('Séance en cours reprise.'); }, 300); }
+}
 render();
 if (profil) { flush(); bleConnecter(false); }
-if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(function () {});
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  var avaitSw = !!navigator.serviceWorker.controller, majEnAttente = false;
+  navigator.serviceWorker.register('sw.js').catch(function () {});
+  navigator.serviceWorker.addEventListener('controllerchange', function () {
+    if (!avaitSw) return;                     // première installation : rien à recharger
+    if (Live.s) majEnAttente = true; else location.reload();
+  });
+  setInterval(function () { if (majEnAttente && !Live.s) location.reload(); }, 5000);
+}
 window.__foulee = { Live: Live, BLE: BLE, versEtapes: versEtapes, DB: function () { return DB; }, flush: flush };
 })();
