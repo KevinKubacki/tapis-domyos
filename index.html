@@ -3,409 +3,99 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Test du tapis T900D</title>
+<meta name="theme-color" content="#F3F5F9">
+<title>Tapis Domyos</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#F3F5F9; --card:#FFFFFF; --ink:#121826; --muted:#5B6474; --line:#E6E9F0;
-  --blue:#2F56E0; --blue-soft:#E3EAFF; --blue-ink:#1E3FB0;
+  --bg:#F3F5F9; --card:#FFFFFF; --ink:#121826; --muted:#5B6474; --line:#E6E9F0; --track:#E3E7EF;
+  --acc:#2F56E0; --acc-ring:#3D6BFF; --acc-soft:#E3EAFF; --acc-ink:#1E3FB0; --acc-pale:#C9D6FF;
   --ok-bg:#E2F6EA; --ok:#17663A; --warn-bg:#FFF1DC; --warn:#8A4B00; --err-bg:#FDE4E1; --err:#A3281B;
   --shadow:0 10px 30px rgba(18,24,38,0.06);
-  box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
 }
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){
-    --bg:#0F1422; --card:#182033; --ink:#EEF1F7; --muted:#A3ACBF; --line:#26304A;
-    --blue:#6E8EFF; --blue-soft:#22305C; --blue-ink:#B9C8FF;
-    --ok-bg:#16352A; --ok:#7FDCA8; --warn-bg:#3A2B12; --warn:#FFC877; --err-bg:#3D1C1A; --err:#FF9C90;
-    --shadow:none;
-  }
-}
-:root[data-theme="dark"]{
-  --bg:#0F1422; --card:#182033; --ink:#EEF1F7; --muted:#A3ACBF; --line:#26304A;
-  --blue:#6E8EFF; --blue-soft:#22305C; --blue-ink:#B9C8FF;
-  --ok-bg:#16352A; --ok:#7FDCA8; --warn-bg:#3A2B12; --warn:#FFC877; --err-bg:#3D1C1A; --err:#FF9C90;
-  --shadow:none;
-}
-html{scroll-padding-top:env(safe-area-inset-top,0px)}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:'Plus Jakarta Sans','Segoe UI',system-ui,sans-serif;line-height:1.45}
-main{max-width:560px;margin:0 auto;padding:24px 18px 48px;display:flex;flex-direction:column;gap:16px}
-h1{font-size:28px;font-weight:800;letter-spacing:-0.02em;margin:8px 0 0;line-height:1.15}
-.intro{color:var(--muted);margin:0;font-size:15px}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg)}
+body{color:var(--ink);font-family:'Plus Jakarta Sans','Segoe UI',system-ui,sans-serif;line-height:1.4;-webkit-font-smoothing:antialiased}
+#app{max-width:520px;margin:0 auto;min-height:100%;display:flex;flex-direction:column;
+  padding:calc(env(safe-area-inset-top,0px) + 22px) 20px calc(env(safe-area-inset-bottom,0px) + 96px)}
+#app.nonav{padding-bottom:calc(env(safe-area-inset-bottom,0px) + 24px)}
+h1{font-size:30px;font-weight:800;letter-spacing:-0.02em;line-height:1.1;margin:0}
+h2{font-size:17px;font-weight:700;margin:0}
+p{margin:0}
+.muted{color:var(--muted)}
+.small{font-size:13px}
+.stack{display:flex;flex-direction:column;gap:14px}
 .card{background:var(--card);border-radius:24px;padding:18px;box-shadow:var(--shadow)}
-.card h2{font-size:17px;margin:0 0 4px;font-weight:700;display:flex;align-items:center;gap:10px}
-.step{width:26px;height:26px;border-radius:50%;background:var(--blue-soft);color:var(--blue-ink);font-size:13px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
-.card p{margin:0 0 12px;color:var(--muted);font-size:14px}
-button{font:inherit;font-weight:700;border:0;border-radius:16px;min-height:48px;padding:0 16px;cursor:pointer;background:var(--blue-soft);color:var(--blue-ink)}
-button.primary{background:var(--blue);color:#fff}
+.row{display:flex;gap:10px;align-items:center}
+.between{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+button,.btn{font:inherit;font-weight:700;border:0;border-radius:18px;min-height:48px;padding:0 18px;cursor:pointer;
+  background:var(--acc-soft);color:var(--acc-ink);display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none}
+button.primary{background:var(--acc);color:#fff}
+button.white{background:var(--card);color:var(--ink);box-shadow:var(--shadow)}
+button.ghost{background:transparent;color:var(--acc);padding:0 4px;min-height:44px;font-weight:600}
+button.danger{background:var(--err-bg);color:var(--err)}
+button.big{min-height:60px;font-size:17px;border-radius:20px}
 button:disabled{opacity:.4;cursor:not-allowed}
-button:focus-visible,a:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
-.row{display:flex;gap:10px;flex-wrap:wrap}
-.row > button{flex:1 1 120px}
-.link{background:none;color:var(--blue);min-height:44px;padding:0;font-weight:600}
-.status{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;font-size:13px;font-weight:600;background:var(--line);color:var(--muted);margin-top:12px}
-.status i{width:8px;height:8px;border-radius:50%;background:currentColor}
-.status.ok{background:var(--ok-bg);color:var(--ok)}
-.status.warn{background:var(--warn-bg);color:var(--warn)}
-.status.err{background:var(--err-bg);color:var(--err)}
-.tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
-.tile{background:var(--bg);border-radius:16px;padding:12px}
-.tile span{display:block;font-size:12px;color:var(--muted)}
-.tile b{display:block;font-size:22px;font-weight:800;margin-top:2px;font-variant-numeric:tabular-nums}
-.tile small{font-size:12px;color:var(--muted);font-weight:600}
-.big{font-size:56px;font-weight:800;letter-spacing:-0.03em;line-height:1;font-variant-numeric:tabular-nums}
-.speedline{display:flex;align-items:baseline;gap:8px;margin:4px 0 14px}
-.speedline small{color:var(--muted);font-weight:600}
-dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:8px 14px;font-size:14px}
-dt{color:var(--muted)} dd{margin:0;font-weight:700}
-.yes{color:var(--ok)} .no{color:var(--err)}
-.alert{background:var(--warn-bg);color:var(--warn);border-radius:16px;padding:12px 14px;font-size:14px;margin-bottom:12px}
-.ctrl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:10px}
-.ctrl .lbl{grid-column:1/-1;font-size:13px;color:var(--muted);font-weight:600;margin-top:4px}
-ol.changes{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:14px}
-ol.changes li{display:flex;gap:12px;padding:10px 12px;background:var(--bg);border-radius:12px}
-ol.changes time{font-weight:800;min-width:48px;font-variant-numeric:tabular-nums}
-.empty{color:var(--muted);font-size:14px}
-pre{background:var(--bg);border-radius:14px;padding:12px;font-size:11.5px;line-height:1.5;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0 0 12px}
-.hidden{display:none}
+button:focus-visible,input:focus-visible{outline:3px solid var(--acc-ring);outline-offset:2px}
+.full{width:100%}
+input[type=text],input[type=password]{font:inherit;font-size:16px;width:100%;min-height:50px;border-radius:16px;border:1.5px solid var(--line);padding:0 14px;background:var(--card);color:var(--ink)}
+.avatar{border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;flex-shrink:0}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;font-size:12px;font-weight:600;background:var(--line);color:var(--muted);white-space:nowrap}
+.chip i{width:7px;height:7px;border-radius:50%;background:currentColor}
+.chip.ok{background:var(--ok-bg);color:var(--ok)} .chip.warn{background:var(--warn-bg);color:var(--warn)} .chip.err{background:var(--err-bg);color:var(--err)}
+.tile{background:var(--card);border-radius:20px;padding:14px;box-shadow:var(--shadow);min-width:0}
+.tile .l{font-size:12px;color:var(--muted)}
+.tile .v{font-size:22px;font-weight:800;margin-top:2px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .v small{font-size:13px;color:var(--muted);font-weight:600}
+.num{font-variant-numeric:tabular-nums}
+.seg{display:flex;background:#E6E9F0;border-radius:16px;padding:4px}
+.seg button{flex:1;min-height:42px;border-radius:12px;background:transparent;color:var(--muted);font-weight:600;font-size:14px}
+.seg button.on{background:var(--card);color:var(--ink);font-weight:700;box-shadow:0 2px 8px rgba(18,24,38,0.08)}
+.bars{display:flex;align-items:flex-end;gap:3px}
+.bars > div{border-radius:5px;min-width:2px}
+.list{display:flex;flex-direction:column;gap:10px}
+.item{background:var(--card);border-radius:20px;padding:14px 16px;box-shadow:var(--shadow);display:flex;align-items:center;gap:14px;cursor:pointer;border:0;width:100%;text-align:left;font:inherit;color:inherit;min-height:64px}
+.item .ic{width:44px;height:44px;border-radius:14px;background:var(--acc-soft);color:var(--acc-ink);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.item .t{font-weight:700}
+.item .s{font-size:13px;color:var(--muted);margin-top:1px}
+.item .grow{flex:1;min-width:0}
+.empty{text-align:center;color:var(--muted);font-size:14px;padding:22px 12px}
+nav.tabs{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);
+  padding:8px 0 calc(env(safe-area-inset-bottom,0px) + 10px);display:grid;grid-template-columns:repeat(4,minmax(0,1fr));z-index:5}
+nav.tabs[hidden]{display:none}
+nav.tabs button{background:none;flex-direction:column;gap:3px;font-size:11px;font-weight:600;color:var(--muted);min-height:50px;padding:0;border-radius:0}
+nav.tabs button.on{color:var(--acc)}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}
+.cal div{height:32px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600}
+.ring{position:relative;align-self:center}
+.ring svg{position:absolute;inset:0}
+.ring .c{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.stepper{display:flex;gap:8px;margin-top:10px}
+.stepper button{flex:1;min-height:48px;border-radius:14px;padding:0}
+.stepper button.minus{background:var(--bg);color:var(--ink)}
+.banner{border-radius:18px;padding:12px 14px;font-size:14px;display:flex;gap:10px;align-items:center;justify-content:space-between}
+.banner.warn{background:var(--warn-bg);color:var(--warn)}
+.banner.err{background:var(--err-bg);color:var(--err)}
+.overlay{position:fixed;inset:0;background:rgba(18,24,38,.55);display:flex;align-items:center;justify-content:center;z-index:20}
+.count{width:180px;height:180px;border-radius:50%;background:var(--acc);color:#fff;font-size:88px;font-weight:800;display:flex;align-items:center;justify-content:center}
+.toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 90px);transform:translateX(-50%);background:var(--ink);color:#fff;padding:12px 18px;border-radius:14px;font-size:14px;z-index:30;max-width:90%}
+.profcard{background:var(--card);border-radius:28px;padding:22px 16px;display:flex;flex-direction:column;align-items:center;gap:12px;box-shadow:var(--shadow);border:0;font:inherit;color:inherit;cursor:pointer;outline:2.5px solid transparent}
+.profcard.sel{outline-color:var(--acc-ring)}
+label.check{display:flex;align-items:center;gap:12px;font-size:15px;font-weight:500;min-height:44px;cursor:pointer}
+label.check input{width:22px;height:22px;margin:0;accent-color:var(--acc)}
+@media (prefers-reduced-motion: no-preference){ .count{animation:pop .9s ease-out infinite} @keyframes pop{0%{transform:scale(.8)}30%{transform:scale(1)}} }
 </style>
 </head>
 <body>
-<main>
-  <header>
-    <h1>Test du tapis T900D</h1>
-    <p class="intro">Cette page vérifie ce que ton tapis envoie en Bluetooth et s'il accepte qu'on change sa vitesse. Ouvre-la dans Chrome, Bluetooth activé, et ferme l'appli Decathlon ou Kinomap avant.</p>
-  </header>
-
-  <section class="card" aria-labelledby="t1">
-    <h2 id="t1"><span class="step">1</span>Connexion</h2>
-    <p>Allume le tapis, puis choisis-le dans la liste qui s'ouvre.</p>
-    <div class="row">
-      <button class="primary" id="btnConnect" type="button">Connecter le tapis</button>
-      <button id="btnDisconnect" type="button" disabled>Déconnecter</button>
-    </div>
-    <button class="link" id="btnAll" type="button">Le tapis n'apparaît pas ? Voir tous les appareils</button>
-    <div><span class="status" id="status"><i></i>Non connecté</span></div>
-  </section>
-
-  <section class="card" aria-labelledby="t2">
-    <h2 id="t2"><span class="step">2</span>Données en direct</h2>
-    <p>Lance le tapis depuis sa console : les valeurs doivent bouger ici.</p>
-    <div class="speedline"><span class="big" id="vSpeed">–</span><small>km/h</small></div>
-    <div class="tiles">
-      <div class="tile"><span>Pente</span><b id="vIncl">–</b></div>
-      <div class="tile"><span>Distance</span><b id="vDist">–</b></div>
-      <div class="tile"><span>Temps</span><b id="vTime">–</b></div>
-      <div class="tile"><span>Cardio</span><b id="vHr">–</b></div>
-      <div class="tile"><span>Calories</span><b id="vKcal">–</b></div>
-      <div class="tile"><span>Messages reçus</span><b id="vCount">0</b></div>
-    </div>
-  </section>
-
-  <section class="card" aria-labelledby="t3">
-    <h2 id="t3"><span class="step">3</span>Ce que le tapis annonce</h2>
-    <dl>
-      <dt>Protocole FTMS</dt><dd id="fFtms">–</dd>
-      <dt>Vitesse pilotable</dt><dd id="fSpeed">–</dd>
-      <dt>Pente pilotable</dt><dd id="fIncl">–</dd>
-      <dt>Plage de vitesse</dt><dd id="fSpeedRange">–</dd>
-      <dt>Plage de pente</dt><dd id="fInclRange">–</dd>
-    </dl>
-  </section>
-
-  <section class="card" aria-labelledby="t4">
-    <h2 id="t4"><span class="step">4</span>Test de pilotage</h2>
-    <div class="alert">Fais ce test en marchant doucement, clé de sécurité accrochée. Chaque appui ne change la vitesse que de 0,5 km/h.</div>
-    <button class="primary" id="btnControl" type="button" disabled style="width:100%">Prendre la main sur le tapis</button>
-    <div class="ctrl">
-      <span class="lbl">Vitesse</span>
-      <button id="btnSpdDown" type="button" disabled>− 0,5 km/h</button>
-      <button id="btnSpdUp" type="button" disabled>+ 0,5 km/h</button>
-      <span class="lbl">Pente</span>
-      <button id="btnInclDown" type="button" disabled>− 1 %</button>
-      <button id="btnInclUp" type="button" disabled>+ 1 %</button>
-      <span class="lbl">Tapis</span>
-      <button id="btnStart" type="button" disabled>Démarrer</button>
-      <button id="btnPause" type="button" disabled>Pause</button>
-    </div>
-    <div><span class="status" id="ctrlStatus"><i></i>Pas encore testé</span></div>
-  </section>
-
-  <section class="card" aria-labelledby="t5">
-    <h2 id="t5"><span class="step">5</span>Changements faits sur la console</h2>
-    <p>Change la vitesse ou la pente avec les boutons du tapis : chaque réglage tenu 2 secondes s'ajoute ici. C'est la base de la future fonction « Enregistrer comme modèle ».</p>
-    <ol class="changes" id="changes"><li class="empty">Aucun changement pour l'instant.</li></ol>
-  </section>
-
-  <section class="card" aria-labelledby="t6">
-    <h2 id="t6"><span class="step">6</span>Journal technique</h2>
-    <p>Après le test, copie le journal et colle-le dans la conversation avec Claude.</p>
-    <pre id="log" aria-live="polite"></pre>
-    <div class="row">
-      <button class="primary" id="btnCopy" type="button">Copier le journal</button>
-      <button id="btnClear" type="button">Vider</button>
-    </div>
-  </section>
-</main>
-
-<script>
-(function(){
-  var FTMS = 0x1826, HRS = 0x180D;
-  var CH = { feature:0x2ACC, treadmill:0x2ACD, training:0x2AD3, speedRange:0x2AD4, inclRange:0x2AD5, control:0x2AD9, status:0x2ADA, hr:0x2A37 };
-  var EXTRA = ['49535343-fe7d-4ae5-8fa9-9fafd205e455', 0x180A, 0x180F];
-  var $ = function(id){ return document.getElementById(id); };
-
-  var device=null, server=null, cp=null, cpWaiter=null;
-  var state = { speed:null, incl:null, dist:null, elapsed:null, hr:null, kcal:null };
-  var count=0, sessionStart=null, speedRange=null, inclRange=null;
-  var track = { speed:{logged:null,pending:null,since:0}, incl:{logged:null,pending:null,since:0} };
-  var logLines=[];
-
-  function ts(){ var d=new Date(); return d.toTimeString().slice(0,8); }
-  function log(msg){ logLines.push(ts()+'  '+msg); if(logLines.length>600) logLines.shift(); var el=$('log'); el.textContent=logLines.join('\n'); el.scrollTop=el.scrollHeight; }
-  function hex(dv){ var a=[]; for(var i=0;i<dv.byteLength;i++) a.push(('0'+dv.getUint8(i).toString(16)).slice(-2)); return a.join(' '); }
-  function fr(n,d){ return n.toFixed(d).replace('.',','); }
-  function setStatus(id,cls,txt){ var el=$(id); el.className='status '+(cls||''); el.innerHTML='<i></i>'+txt; }
-  function mmss(s){ var m=Math.floor(s/60), r=s%60; return m+':'+('0'+r).slice(-2); }
-
-  log('Navigateur : '+navigator.userAgent);
-  if(!navigator.bluetooth){
-    setStatus('status','err','Bluetooth web indisponible : ouvre la page dans Chrome');
-    log('navigator.bluetooth absent (Brave, Firefox, iPhone ou page intégrée).');
-    $('btnConnect').disabled=true; $('btnAll').disabled=true;
-  }
-
-  async function connect(all){
-    try{
-      var opts = all ? { acceptAllDevices:true, optionalServices:[FTMS,HRS].concat(EXTRA) }
-                     : { filters:[{services:[FTMS]},{namePrefix:'Domyos'},{namePrefix:'DOMYOS'}], optionalServices:[FTMS,HRS].concat(EXTRA) };
-      setStatus('status','warn','Choisis le tapis dans la liste…');
-      device = await navigator.bluetooth.requestDevice(opts);
-      log('Appareil choisi : '+(device.name||'(sans nom)')+' id='+device.id);
-      device.addEventListener('gattserverdisconnected', onDisconnected);
-      setStatus('status','warn','Connexion à '+(device.name||'l\'appareil')+'…');
-      server = await device.gatt.connect();
-      log('GATT connecté.');
-      await listServices();
-      await setupFtms();
-      $('btnDisconnect').disabled=false;
-      setStatus('status','ok','Connecté à '+(device.name||'l\'appareil'));
-    }catch(e){
-      log('Erreur connexion : '+e.name+' – '+e.message);
-      if(e.name==='NotFoundError') setStatus('status','','Aucun appareil choisi');
-      else if(e.name==='SecurityError') setStatus('status','err','Bluetooth bloqué par la page : ouvre-la directement dans Chrome');
-      else setStatus('status','err','Échec : '+e.message);
-    }
-  }
-
-  async function listServices(){
-    try{
-      var services = await server.getPrimaryServices();
-      for(var i=0;i<services.length;i++){
-        var s=services[i]; var chars=[];
-        try{ chars = await s.getCharacteristics(); }catch(e){}
-        log('Service '+s.uuid+' : '+chars.map(function(c){
-          var p=c.properties, f=[]; if(p.read)f.push('R'); if(p.write)f.push('W'); if(p.writeWithoutResponse)f.push('w'); if(p.notify)f.push('N'); if(p.indicate)f.push('I');
-          return c.uuid.slice(4,8)+'['+f.join('')+']'; }).join(', '));
-      }
-    }catch(e){ log('Liste des services impossible : '+e.message); }
-  }
-
-  async function setupFtms(){
-    var svc;
-    try{ svc = await server.getPrimaryService(FTMS); }
-    catch(e){ $('fFtms').innerHTML='<span class="no">Non trouvé</span>'; log('Service FTMS absent : '+e.message); return; }
-    $('fFtms').innerHTML='<span class="yes">Oui</span>';
-
-    try{
-      var f = await (await svc.getCharacteristic(CH.feature)).readValue();
-      var mf=f.getUint32(0,true), tf=f.getUint32(4,true);
-      log('Features machine=0x'+mf.toString(16)+' cibles=0x'+tf.toString(16));
-      $('fSpeed').innerHTML = (tf&1)?'<span class="yes">Oui</span>':'<span class="no">Non annoncé</span>';
-      $('fIncl').innerHTML  = (tf&2)?'<span class="yes">Oui</span>':'<span class="no">Non annoncé</span>';
-    }catch(e){ log('Lecture features impossible : '+e.message); }
-
-    try{
-      var r = await (await svc.getCharacteristic(CH.speedRange)).readValue();
-      speedRange={min:r.getUint16(0,true)/100,max:r.getUint16(2,true)/100,step:r.getUint16(4,true)/100};
-      $('fSpeedRange').textContent=fr(speedRange.min,1)+' à '+fr(speedRange.max,1)+' km/h (pas '+fr(speedRange.step,2)+')';
-      log('Plage vitesse '+hex(r));
-    }catch(e){ $('fSpeedRange').textContent='Non fournie'; }
-    try{
-      var r2 = await (await svc.getCharacteristic(CH.inclRange)).readValue();
-      inclRange={min:r2.getInt16(0,true)/10,max:r2.getInt16(2,true)/10,step:r2.getUint16(4,true)/10};
-      $('fInclRange').textContent=fr(inclRange.min,1)+' à '+fr(inclRange.max,1)+' % (pas '+fr(inclRange.step,1)+')';
-      log('Plage pente '+hex(r2));
-    }catch(e){ $('fInclRange').textContent='Non fournie'; }
-
-    try{
-      var td = await svc.getCharacteristic(CH.treadmill);
-      td.addEventListener('characteristicvaluechanged', function(ev){ onTreadmill(ev.target.value); });
-      await td.startNotifications();
-      log('Abonné aux données tapis (2ACD).');
-    }catch(e){ log('Données tapis indisponibles : '+e.message); }
-
-    try{
-      var st = await svc.getCharacteristic(CH.status);
-      st.addEventListener('characteristicvaluechanged', function(ev){ onMachineStatus(ev.target.value); });
-      await st.startNotifications();
-      log('Abonné au statut machine (2ADA).');
-    }catch(e){ log('Statut machine indisponible : '+e.message); }
-
-    try{
-      var tr = await svc.getCharacteristic(CH.training);
-      tr.addEventListener('characteristicvaluechanged', function(ev){ log('Training status : '+hex(ev.target.value)); });
-      await tr.startNotifications();
-    }catch(e){}
-
-    try{
-      cp = await svc.getCharacteristic(CH.control);
-      cp.addEventListener('characteristicvaluechanged', function(ev){ onControlResponse(ev.target.value); });
-      await cp.startNotifications();
-      $('btnControl').disabled=false;
-      log('Point de contrôle (2AD9) prêt.');
-    }catch(e){ cp=null; log('Point de contrôle indisponible : '+e.message); setStatus('ctrlStatus','err','Le tapis ne propose pas de pilotage'); }
-
-    try{
-      var hrs = await server.getPrimaryService(HRS);
-      var hrc = await hrs.getCharacteristic(CH.hr);
-      hrc.addEventListener('characteristicvaluechanged', function(ev){ var v=ev.target.value; var f=v.getUint8(0); state.hr=(f&1)?v.getUint16(1,true):v.getUint8(1); render(); });
-      await hrc.startNotifications();
-      log('Service cardio (180D) trouvé.');
-    }catch(e){}
-  }
-
-  function onTreadmill(dv){
-    count++;
-    if(count<=5 || count%30===0) log('2ACD #'+count+' : '+hex(dv));
-    try{
-      var o=0, f=dv.getUint16(o,true); o+=2;
-      if(!(f&1)){ state.speed=dv.getUint16(o,true)/100; o+=2; }
-      if(f&2){ o+=2; }
-      if(f&4){ state.dist=dv.getUint16(o,true)+(dv.getUint8(o+2)<<16); o+=3; }
-      if(f&8){ state.incl=dv.getInt16(o,true)/10; o+=4; }
-      if(f&16){ o+=4; }
-      if(f&32){ o+=1; }
-      if(f&64){ o+=1; }
-      if(f&128){ var k=dv.getUint16(o,true); if(k!==0xFFFF) state.kcal=k; o+=5; }
-      if(f&256){ var h=dv.getUint8(o); if(h>0) state.hr=h; o+=1; }
-      if(f&512){ o+=1; }
-      if(f&1024){ state.elapsed=dv.getUint16(o,true); o+=2; }
-      if(f&2048){ o+=2; }
-      if(o>dv.byteLength) log('Attention : message plus court que prévu (flags 0x'+f.toString(16)+')');
-    }catch(e){ log('Décodage impossible : '+e.message+' – '+hex(dv)); }
-    if(state.speed>0 && !sessionStart) sessionStart=Date.now();
-    watchChange('speed', state.speed, 0.1);
-    watchChange('incl', state.incl, 0.5);
-    render();
-  }
-
-  function watchChange(key, val, min){
-    if(val===null || !sessionStart) return;
-    var t=track[key], now=Date.now();
-    if(t.logged===null){ t.logged=val; addChange(key, val, true); return; }
-    if(Math.abs(val-t.logged) < min){ t.pending=null; return; }
-    if(t.pending===null || Math.abs(val-t.pending) >= min/2){ t.pending=val; t.since=now; return; }
-    if(now-t.since >= 2000){ t.logged=t.pending; t.pending=null; addChange(key, t.logged, false); }
-  }
-
-  function addChange(key, val, first){
-    var list=$('changes'); var empty=list.querySelector('.empty'); if(empty) empty.remove();
-    var sec=Math.max(0,Math.round((Date.now()-sessionStart)/1000));
-    var txt = key==='speed' ? (first?'Départ à ':'Vitesse → ')+fr(val,1)+' km/h' : (first?'Pente de départ ':'Pente → ')+fr(val,1)+' %';
-    var li=document.createElement('li'); var tm=document.createElement('time'); tm.textContent=mmss(sec);
-    var sp=document.createElement('span'); sp.textContent=txt; li.appendChild(tm); li.appendChild(sp); list.appendChild(li);
-    log('Changement ['+mmss(sec)+'] '+txt);
-  }
-
-  function render(){
-    $('vSpeed').textContent = state.speed===null?'–':fr(state.speed,1);
-    $('vIncl').innerHTML = state.incl===null?'–':fr(state.incl,1)+'<small> %</small>';
-    $('vDist').innerHTML = state.dist===null?'–':fr(state.dist/1000,2)+'<small> km</small>';
-    var el = state.elapsed!==null ? state.elapsed : (sessionStart?Math.round((Date.now()-sessionStart)/1000):null);
-    $('vTime').textContent = el===null?'–':mmss(el);
-    $('vHr').textContent = state.hr===null?'–':state.hr;
-    $('vKcal').textContent = state.kcal===null?'–':state.kcal;
-    $('vCount').textContent = count;
-  }
-
-  var STATUS_TXT = {0x01:'Réinitialisé',0x02:'Arrêté / pause',0x03:'Arrêt de sécurité',0x04:'Démarré',0x05:'Vitesse cible changée',0x06:'Pente cible changée',0x12:'Contrôle perdu',0xFF:'Spécifique fabricant'};
-  function onMachineStatus(dv){
-    var op=dv.getUint8(0); var extra='';
-    if(op===0x05 && dv.byteLength>=3) extra=' : '+fr(dv.getUint16(1,true)/100,1)+' km/h';
-    if(op===0x06 && dv.byteLength>=3) extra=' : '+fr(dv.getInt16(1,true)/10,1)+' %';
-    log('Statut machine : '+(STATUS_TXT[op]||'code 0x'+op.toString(16))+extra+' ('+hex(dv)+')');
-  }
-
-  var RESULT_TXT = {1:'accepté',2:'non supporté',3:'paramètre refusé',4:'échec',5:'pilotage non autorisé'};
-  var OP_TXT = {0x00:'Prendre la main',0x02:'Vitesse cible',0x03:'Pente cible',0x07:'Démarrer',0x08:'Stop/Pause'};
-  function onControlResponse(dv){
-    log('Réponse contrôle : '+hex(dv));
-    if(dv.getUint8(0)!==0x80) return;
-    var op=dv.getUint8(1), res=dv.getUint8(2);
-    var txt=(OP_TXT[op]||'op 0x'+op.toString(16))+' : '+(RESULT_TXT[res]||'code '+res);
-    setStatus('ctrlStatus', res===1?'ok':'err', txt);
-    if(op===0x00 && res===1) ['btnSpdDown','btnSpdUp','btnInclDown','btnInclUp','btnStart','btnPause'].forEach(function(id){ $(id).disabled=false; });
-    if(cpWaiter){ cpWaiter(res); cpWaiter=null; }
-  }
-
-  async function send(bytes, label){
-    if(!cp) return;
-    try{
-      setStatus('ctrlStatus','warn',label+'…');
-      log('Envoi '+label+' : '+Array.prototype.map.call(bytes,function(b){return ('0'+b.toString(16)).slice(-2);}).join(' '));
-      var w = cp.writeValueWithResponse ? cp.writeValueWithResponse.bind(cp) : cp.writeValue.bind(cp);
-      await w(bytes);
-      setTimeout(function(){ if($('ctrlStatus').classList.contains('warn')) setStatus('ctrlStatus','err',label+' : aucune réponse du tapis'); }, 3000);
-    }catch(e){ log('Échec envoi '+label+' : '+e.name+' – '+e.message); setStatus('ctrlStatus','err',label+' : '+e.message); }
-  }
-  function u16(v){ return [v&0xFF,(v>>8)&0xFF]; }
-  function setSpeed(delta){
-    var base = state.speed||0; var t=Math.round((base+delta)*10)/10;
-    var min=speedRange?speedRange.min:1, max=speedRange?speedRange.max:18;
-    t=Math.max(min,Math.min(max,t));
-    send(new Uint8Array([0x02].concat(u16(Math.round(t*100)))), 'Vitesse '+fr(t,1)+' km/h');
-  }
-  function setIncl(delta){
-    var base = state.incl||0; var t=Math.round(base+delta);
-    var min=inclRange?inclRange.min:0, max=inclRange?inclRange.max:10;
-    t=Math.max(min,Math.min(max,t)); var v=Math.round(t*10); if(v<0) v=0x10000+v;
-    send(new Uint8Array([0x03].concat(u16(v))), 'Pente '+t+' %');
-  }
-
-  function onDisconnected(){
-    log('Tapis déconnecté.');
-    setStatus('status','','Déconnecté');
-    $('btnDisconnect').disabled=true; $('btnControl').disabled=true;
-    ['btnSpdDown','btnSpdUp','btnInclDown','btnInclUp','btnStart','btnPause'].forEach(function(id){ $(id).disabled=true; });
-    cp=null;
-  }
-
-  $('btnConnect').addEventListener('click', function(){ connect(false); });
-  $('btnAll').addEventListener('click', function(){ connect(true); });
-  $('btnDisconnect').addEventListener('click', function(){ if(device&&device.gatt.connected) device.gatt.disconnect(); });
-  $('btnControl').addEventListener('click', function(){ send(new Uint8Array([0x00]), 'Prendre la main'); });
-  $('btnSpdDown').addEventListener('click', function(){ setSpeed(-0.5); });
-  $('btnSpdUp').addEventListener('click', function(){ setSpeed(0.5); });
-  $('btnInclDown').addEventListener('click', function(){ setIncl(-1); });
-  $('btnInclUp').addEventListener('click', function(){ setIncl(1); });
-  $('btnStart').addEventListener('click', function(){ send(new Uint8Array([0x07]), 'Démarrer'); });
-  $('btnPause').addEventListener('click', function(){ send(new Uint8Array([0x08,0x02]), 'Pause'); });
-  $('btnClear').addEventListener('click', function(){ logLines=[]; $('log').textContent=''; });
-  $('btnCopy').addEventListener('click', async function(){
-    var text=logLines.join('\n');
-    try{ await navigator.clipboard.writeText(text); $('btnCopy').textContent='Journal copié'; }
-    catch(e){
-      var ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select();
-      try{ document.execCommand('copy'); $('btnCopy').textContent='Journal copié'; }catch(e2){ $('btnCopy').textContent='Sélectionne le journal à la main'; }
-      ta.remove();
-    }
-    setTimeout(function(){ $('btnCopy').textContent='Copier le journal'; }, 2500);
-  });
-  setInterval(function(){ if(sessionStart && state.elapsed===null) render(); }, 1000);
-})();
-</script>
+<div id="app"></div>
+<nav class="tabs" id="tabs" hidden></nav>
+<script src="config.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
