@@ -3,7 +3,7 @@
 'use strict';
 
 /* ---------- Constantes ---------- */
-var VERSION = '1.3';
+var VERSION = '1.4';
 var PROFILS = {
   kevin: { id: 'kevin', nom: 'Kévin', init: 'K', acc: '#2F56E0', ring: '#3D6BFF', soft: '#E3EAFF', ink: '#1E3FB0', pale: '#C9D6FF' },
   susan: { id: 'susan', nom: 'Susan', init: 'S', acc: '#C2401F', ring: '#FF7A55', soft: '#FFE4DC', ink: '#9A3216', pale: '#FFC9B8' }
@@ -177,7 +177,7 @@ function flush() {
     })
     .then(function () {
       syncState.busy = false;
-      if (route.name === 'reglages') rafraichir();
+      if (route.name === 'reglages' || route.name === 'fin') rafraichir();
       if (syncState.again || outbox().some(function (o) { return o.profil === p; }) && !syncState.error) planifierFlush(300);
     });
   return syncState.promise;
@@ -770,7 +770,7 @@ var SCREENS = {
     return '<div class="stack">' +
       '<div style="padding-top:10px"><p class="muted">' + esc(dateLongue(x.debut)) + ' · ' + heure(x.debut) + '</p><h1 style="margin-top:4px">Bravo ' + profil.nom + '&nbsp;!</h1></div>' +
       statsSeance(x) +
-      '<div class="row small muted">' + (API_URL ? (outbox().length ? '<span class="chip warn"><i></i>Enregistrée, en attente d\'envoi</span>' : '<span class="chip ok"><i></i>Séance enregistrée</span>') : '<span class="chip ok"><i></i>Séance enregistrée sur ce téléphone</span>') + '</div>' +
+      '<div class="row small muted">' + puceSauvegarde() + '</div>' +
       (peutModele ? (sauve ? '<div class="card"><h2>Modèle enregistré</h2><p class="small muted" style="margin-top:4px">Retrouve-le dans Séances › Mes modèles : le tapis refera les mêmes changements tout seul.</p></div>'
         : '<div class="card stack" style="gap:10px"><div><h2>Enregistrer comme modèle&nbsp;?</h2><p class="small muted" style="margin-top:4px">L\'appli a noté ' + versEtapes(x.changements, x.duree).length + ' réglages de vitesse et de pente. La prochaine fois, le tapis les refera tout seul.</p></div>' +
           '<div class="bars" style="height:44px">' + barresEtapes(versEtapes(x.changements, x.duree), -1, 44) + '</div>' +
@@ -854,12 +854,19 @@ var SCREENS = {
         '<p class="small muted">' + (BLE.device ? esc(BLE.device.name || 'Tapis') : 'Aucun tapis mémorisé') + '</p>' +
         '<button data-act="connect-new">Choisir le tapis</button></div>' +
       '<div class="card stack" style="gap:10px"><h2>Sauvegarde</h2><p class="small ' + (syncState.error ? '' : 'muted') + '" style="' + (syncState.error ? 'color:var(--err)' : '') + '">' + esc(sync) + '</p>' +
-        (API_URL ? '<button data-act="sync">Synchroniser maintenant</button>' +
+        (API_URL ? '<button class="white" data-act="sync">Forcer l\'envoi (secours)</button>' +
           '<label for="code2" class="small" style="font-weight:600">Code d\'accès</label><div class="row"><input id="code2" type="password" inputmode="numeric" autocomplete="off" placeholder="Nouveau code"><button data-act="save-code">OK</button></div>' : '') + '</div>' +
       '<p class="small muted" style="text-align:center">Tapis Domyos ' + VERSION + '</p></div>';
   }
 };
 
+function puceSauvegarde() {
+  if (!API_URL) return '<span class="chip ok"><i></i>Séance enregistrée sur ce téléphone</span>';
+  var attente = outbox().some(function (o) { return o.profil === profil.id; });
+  if (!attente) return '<span class="chip ok"><i></i>Séance enregistrée dans le Sheet</span>';
+  if (syncState.busy || !syncState.error) return '<span class="chip warn"><i></i>Envoi au Sheet…</span>';
+  return '<span class="chip warn"><i></i>Pas de réseau : en attente, envoi automatique dès que possible</span>';
+}
 function statsSeance(x) {
   var tiles = [
     ['Distance', km(x.distance) + ' <small>km</small>'], ['Durée', mmss(x.duree)],
