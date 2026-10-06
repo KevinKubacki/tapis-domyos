@@ -3,7 +3,7 @@
 'use strict';
 
 /* ---------- Constantes ---------- */
-var VERSION = '1.1';
+var VERSION = '1.3';
 var PROFILS = {
   kevin: { id: 'kevin', nom: 'Kévin', init: 'K', acc: '#2F56E0', ring: '#3D6BFF', soft: '#E3EAFF', ink: '#1E3FB0', pale: '#C9D6FF' },
   susan: { id: 'susan', nom: 'Susan', init: 'S', acc: '#C2401F', ring: '#FF7A55', soft: '#FFE4DC', ink: '#9A3216', pale: '#FFC9B8' }
@@ -65,6 +65,32 @@ var ICON = {
   next: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>',
   run: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="14" cy="4.5" r="1.8"/><path d="M8 21l3-6 3 2v4M6 12l3-4h4l2 3 3 1M11 8l-1 5"/></svg>',
   star: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></svg>'
+};
+
+/* ---------- Son et vibration des boutons ---------- */
+var Son = {
+  ctx: null,
+  actif: function () { return localStorage.getItem('foulee:son') !== '0'; },
+  bip: function (freq, dur, vol) {
+    if (!Son.actif()) return;
+    try {
+      if (!Son.ctx) Son.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (Son.ctx.state === 'suspended') Son.ctx.resume();
+      var t = Son.ctx.currentTime, o = Son.ctx.createOscillator(), g = Son.ctx.createGain();
+      o.type = 'sine'; o.frequency.setValueAtTime(freq, t);
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol || 0.35, t + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + (dur || 0.07));
+      o.connect(g); g.connect(Son.ctx.destination); o.start(t); o.stop(t + (dur || 0.07) + 0.02);
+    } catch (e) {}
+  },
+  vibre: function (ms) { if (Son.actif() && navigator.vibrate) try { navigator.vibrate(ms); } catch (e) {} },
+  plus: function () { Son.bip(1180, 0.06); Son.vibre(12); },
+  moins: function () { Son.bip(760, 0.06); Son.vibre(12); },
+  clic: function () { Son.bip(950, 0.04, 0.2); Son.vibre(8); },
+  compte: function () { Son.bip(660, 0.12); Son.vibre(30); },
+  go: function () { Son.bip(1320, 0.3); Son.vibre([40, 40, 80]); },
+  etape: function () { Son.bip(880, 0.12); setTimeout(function () { Son.bip(1320, 0.18); }, 150); Son.vibre([30, 60, 30]); },
+  refus: function () { Son.bip(220, 0.2); Son.vibre(120); }
 };
 
 /* ---------- Profil et thème ---------- */
@@ -167,7 +193,7 @@ document.addEventListener('focusout', function () { setTimeout(function () { if 
 window.addEventListener('online', function () { retry.n = 0; flush(); });
 document.addEventListener('visibilitychange', function () {
   if (!profil) return;
-  if (document.visibilityState === 'visible') { retry.n = 0; flush(); if (!BLE.connected && !BLE.connecting) bleConnecter(false); }
+  if (document.visibilityState === 'visible') { retry.n = 0; flush(); if (!BLE.connected && !BLE.connecting && !BLE.recherche) bleConnecter(false); }
   else envoiDeSecours();
 });
 window.addEventListener('pagehide', envoiDeSecours);
@@ -194,7 +220,8 @@ var BLE = {
 function bleDispo() { return !!navigator.bluetooth; }
 function bleConnecter(choisir) {
   if (!bleDispo()) { BLE.error = 'Bluetooth indisponible : ouvre l\'appli dans Chrome.'; majBle(); return Promise.resolve(false); }
-  BLE.connecting = true; BLE.error = ''; majBle();
+  if (BLE.connected) return Promise.resolve(true);
+  BLE.connecting = true; BLE.error = ''; BLE.recherche = false; majBle();
   var p = choisir
     ? navigator.bluetooth.requestDevice({ filters: [{ services: [FTMS] }, { namePrefix: 'Domyos' }], optionalServices: [FTMS, HRS] })
     : (navigator.bluetooth.getDevices ? navigator.bluetooth.getDevices() : Promise.resolve([])).then(function (list) {
@@ -206,16 +233,37 @@ function bleConnecter(choisir) {
     BLE.device = dev;
     dev.removeEventListener('gattserverdisconnected', onBleDeco);
     dev.addEventListener('gattserverdisconnected', onBleDeco);
-    return withTimeout(dev.gatt.connect(), 12000);
-  }).then(function (server) { return brancherFtms(server); })
-    .then(function () { BLE.connected = true; BLE.connecting = false; majBle(); return true; })
+    return connecterAppareil(dev, !choisir);
+  }).then(function () { BLE.connected = true; BLE.connecting = false; BLE.recherche = false; BLE.error = ''; majBle(); return true; })
     .catch(function (e) {
       BLE.connecting = false; BLE.connected = false;
-      if (e && e.name === 'Silencieux') BLE.error = '';
-      else if (e && e.name === 'NotFoundError') BLE.error = '';
-      else BLE.error = 'Connexion impossible : ' + (e && e.message || e) + '. Vérifie que le tapis est allumé et que l\'appli Decathlon est fermée.';
+      if (e && (e.name === 'Silencieux' || e.name === 'NotFoundError')) BLE.error = '';
+      else if (e && e.name === 'Attente') BLE.error = '';               // on guette le tapis en arrière-plan
+      else BLE.error = 'Tapis introuvable. Vérifie qu\'il est allumé et que l\'appli Decathlon est fermée.';
       majBle(); return false;
     });
+}
+/* Tapis déjà connu : Android exige de l'« entendre » avant de s'y connecter.
+   On écoute ses annonces Bluetooth et on se connecte dès qu'il est allumé. */
+function connecterAppareil(dev, silencieux) {
+  return withTimeout(dev.gatt.connect(), 8000).then(brancherFtms).catch(function (e) {
+    if (!dev.watchAdvertisements) throw e;
+    BLE.recherche = true; majBle();
+    return new Promise(function (resolve, reject) {
+      var fini = false;
+      function stop() { try { dev.unwatchAdvertisements && dev.unwatchAdvertisements(); } catch (x) {} dev.removeEventListener('advertisementreceived', onAd); }
+      function onAd() {
+        if (fini) return; fini = true; stop();
+        BLE.connecting = true; majBle();
+        withTimeout(dev.gatt.connect(), 10000).then(brancherFtms).then(resolve, reject);
+      }
+      dev.addEventListener('advertisementreceived', onAd);
+      dev.watchAdvertisements().catch(function () { if (!fini) { fini = true; stop(); reject(e); } });
+      // On guette jusqu'à 10 min (le temps d'allumer le tapis), sans message d'erreur.
+      setTimeout(function () { if (!fini) { fini = true; stop(); BLE.recherche = false; reject({ name: silencieux ? 'Attente' : 'Timeout' }); } }, 600000);
+      if (silencieux) { BLE.connecting = false; majBle(); }
+    });
+  });
 }
 function withTimeout(p, ms) { return Promise.race([p, new Promise(function (_, rej) { setTimeout(function () { rej(new Error('délai dépassé')); }, ms); })]); }
 function brancherFtms(server) {
@@ -304,13 +352,25 @@ function commande(bytes) {
   });
 }
 function u16(v) { return [v & 0xFF, (v >> 8) & 0xFF]; }
-function cibleVitesse(v) { v = Math.round(clamp(v, Math.max(VMIN, BLE.speedRange.min), Math.min(VMAX, BLE.speedRange.max)) * 10) / 10; Live.attendu('v', v); return commande([0x02].concat(u16(Math.round(v * 100)))); }
-function ciblePente(p) { p = Math.round(clamp(p, BLE.inclRange.min, Math.min(PMAX, BLE.inclRange.max)) * 2) / 2; Live.attendu('p', p); var x = Math.round(p * 10); if (x < 0) x += 0x10000; return commande([0x03].concat(u16(x))); }
+var envoiEnCours = { v: null, p: null }, envoiSuivant = { v: null, p: null };
+/* Plusieurs appuis rapides : l'écran suit chaque appui, le tapis reçoit seulement la dernière valeur. */
+function envoyerCible(k, bytes) {
+  if (envoiEnCours[k]) { envoiSuivant[k] = bytes; return envoiEnCours[k]; }
+  envoiEnCours[k] = commande(bytes).then(function (r) {
+    envoiEnCours[k] = null;
+    if (envoiSuivant[k]) { var b = envoiSuivant[k]; envoiSuivant[k] = null; return envoyerCible(k, b); }
+    return r;
+  });
+  return envoiEnCours[k];
+}
+function cibleVitesse(v) { v = Math.round(clamp(v, Math.max(VMIN, BLE.speedRange.min), Math.min(VMAX, BLE.speedRange.max)) * 10) / 10; Live.attendu('v', v); return envoyerCible('v', [0x02].concat(u16(Math.round(v * 100)))); }
+function ciblePente(p) { p = Math.round(clamp(p, BLE.inclRange.min, Math.min(PMAX, BLE.inclRange.max)) * 2) / 2; Live.attendu('p', p); var x = Math.round(p * 10); if (x < 0) x += 0x10000; return envoyerCible('p', [0x03].concat(u16(x))); }
 function tapisDemarrer() { return commande([0x07]); }
 function tapisPause() { return commande([0x08, 0x02]); }
 function tapisStop() { return commande([0x08, 0x01]); }
 function bleChip() {
   if (BLE.connected) return '<span class="chip ok"><i></i>Tapis connecté</span>';
+  if (BLE.recherche && !BLE.connecting) return '<span class="chip warn"><i></i>En attente du tapis</span>';
   if (BLE.connecting) return '<span class="chip warn"><i></i>Connexion…</span>';
   return '<span class="chip"><i></i>Tapis non connecté</span>';
 }
@@ -323,6 +383,7 @@ function majBle() {
 }
 function bleZone() {
   if (BLE.connected) return '';
+  if (BLE.recherche && !BLE.error) return '<div class="banner warn"><span>Allume le tapis : la connexion se fera toute seule.</span></div>';
   var msg = !bleDispo() ? 'Le Bluetooth ne marche que dans Chrome : ouvre l\'appli depuis Chrome.' : (BLE.error || 'Allume le tapis puis connecte-le.');
   return '<div class="banner ' + (BLE.error || !bleDispo() ? 'err' : 'warn') + '"><span>' + esc(msg) + '</span>' +
     (bleDispo() ? '<button class="primary" data-act="connect" ' + (BLE.connecting ? 'disabled' : '') + '>Connecter</button>' : '') + '</div>';
@@ -381,7 +442,7 @@ var Live = {
     if (s.type === 'pilote' && s.debut && !s.paused && BLE.connected) {
       var st = Live.etapeA(s.active / 1000);
       if (st.i >= Live.etapes().length) { Live.fin('auto'); return; }
-      if (st.i !== s.stepIdx) { s.stepIdx = st.i; Live.appliquerEtape(); }
+      if (st.i !== s.stepIdx) { s.stepIdx = st.i; Live.appliquerEtape(); Son.etape(); }
     }
     if (now - (s.saved || 0) > 4000) Live.sauver();
     if (route.name === 'live') Live.render();
@@ -402,11 +463,18 @@ var Live = {
     var e = Live.etapes()[Live.s.stepIdx]; if (!e) return;
     cibleVitesse(e.v).then(function () { return ciblePente(e.p); });
   },
-  attendu: function (k, val) { if (Live.s) Live.s.cible[k] = val; },
+  attendu: function (k, val) { if (Live.s) { Live.s.cible[k] = val; Live.majConsignes(); } },
+  majConsignes: function () {
+    var s = Live.s; if (!s || !$('lvV')) return;
+    var v = s.cible.v != null && s.debut && !s.paused ? s.cible.v : (BLE.connected ? BLE.data.speed : 0);
+    var p = s.cible.p != null ? s.cible.p : (BLE.data.incl || 0);
+    $('lvV').innerHTML = fr(v, 1) + ' <small>km/h</small>';
+    $('lvP').innerHTML = fr(p, 1) + ' <small>%</small>';
+  },
   onData: function () {},
   onConsole: function (k, val) {
     var s = Live.s; if (!s) return;
-    s.cible[k] = val;
+    s.cible[k] = val; Live.majConsignes();
     if (s.debut && !s.initPending) {
       var c = { t: Math.round(s.active / 1000) }; c[k] = val;
       s.changes.push(c); Live.sauver();
@@ -424,13 +492,13 @@ var Live = {
     var s = Live.s; if (!s || s.decompte) return;
     if (!BLE.connected) { toast('Connecte d\'abord le tapis.'); return; }
     s.decompte = true;
-    var n = 3, ov = document.createElement('div');
+    var n = 3, ov = document.createElement('div'); Son.compte();
     ov.className = 'overlay'; ov.innerHTML = '<div class="count num">3</div>';
     document.body.appendChild(ov);
     var it = setInterval(function () {
       n--;
-      if (n > 0) { ov.firstChild.textContent = n; return; }
-      clearInterval(it); ov.remove(); s.decompte = false;
+      if (n > 0) { ov.firstChild.textContent = n; Son.compte(); return; }
+      clearInterval(it); ov.remove(); s.decompte = false; Son.go();
       tapisDemarrer().then(function (r) {
         if (r !== 1) toast(r === 5 ? 'Le tapis refuse le pilotage : démarre-le avec sa console.' : 'Le tapis n\'a pas répondu : démarre-le avec sa console.');
         else if (s.type === 'pilote') { s.stepIdx = 0; Live.appliquerEtape(); }
@@ -444,8 +512,8 @@ var Live = {
       else if (r !== 1) toast('Reprends avec la console du tapis.');
     });
   },
-  vitesse: function (d) { var b = (Live.s.cible.v != null ? Live.s.cible.v : BLE.data.speed) || 0; cibleVitesse(b + d).then(function (r) { if (r !== 1) toast('Le tapis n\'a pas accepté le changement.'); }); },
-  pente: function (d) { var b = (Live.s.cible.p != null ? Live.s.cible.p : BLE.data.incl) || 0; ciblePente(b + d).then(function (r) { if (r !== 1) toast('Le tapis n\'a pas accepté le changement.'); }); },
+  vitesse: function (d) { var b = (Live.s.cible.v != null ? Live.s.cible.v : BLE.data.speed) || 0; cibleVitesse(b + d).then(function (r) { if (r !== 1) { Son.refus(); toast('Le tapis n\'a pas accepté le changement.'); } }); },
+  pente: function (d) { var b = (Live.s.cible.p != null ? Live.s.cible.p : BLE.data.incl) || 0; ciblePente(b + d).then(function (r) { if (r !== 1) { Son.refus(); toast('Le tapis n\'a pas accepté le changement.'); } }); },
   annuler: function () { clearInterval(Live.timer); Live.s = null; wakeLock(false); localStorage.removeItem(LS.live); },
   fin: function (raison) {
     var s = Live.s; if (!s || s.fini) return;
@@ -473,8 +541,7 @@ var Live = {
     $('lvTime').textContent = mmss(sec);
     $('lvPace').textContent = allure(v);
     $('lvHr').textContent = BLE.data.hr || '–';
-    $('lvV').innerHTML = fr(v, 1) + ' <small>km/h</small>';
-    $('lvP').innerHTML = fr(p, 1) + ' <small>%</small>';
+    Live.majConsignes();
     $('lvDist').textContent = km(s.dist, 2);
     var frac, sub;
     if (s.type === 'pilote') {
@@ -782,6 +849,7 @@ var SCREENS = {
       '<h1>Profil</h1>' +
       '<div class="card row" style="gap:16px">' + avatar(profil, 64) + '<div class="grow"><div style="font-size:22px;font-weight:800">' + profil.nom + '</div><div class="small muted">' + DB.seances.length + ' séance' + (DB.seances.length > 1 ? 's' : '') + ' enregistrée' + (DB.seances.length > 1 ? 's' : '') + '</div></div></div>' +
       '<button class="white full" data-act="changer-profil">Changer de profil</button>' +
+      '<div class="card"><label class="check" style="justify-content:space-between"><span><strong>Sons et vibrations</strong><br><span class="small muted">Bip et vibration à chaque bouton</span></span><input type="checkbox" id="son" ' + (Son.actif() ? 'checked' : '') + '></label></div>' +
       '<div class="card stack" style="gap:10px"><div class="between"><h2>Tapis</h2><span data-ble>' + bleChip() + '</span></div>' +
         '<p class="small muted">' + (BLE.device ? esc(BLE.device.name || 'Tapis') : 'Aucun tapis mémorisé') + '</p>' +
         '<button data-act="connect-new">Choisir le tapis</button></div>' +
@@ -805,8 +873,17 @@ function statsSeance(x) {
 }
 
 /* ---------- Actions ---------- */
+var dernierAppui = 0;
+document.addEventListener('pointerdown', function (ev) {
+  var el = ev.target.closest('[data-act="lv-v"],[data-act="lv-p"]'); if (!el || el.disabled) return;
+  ev.preventDefault(); dernierAppui = Date.now();
+  var d = Number(el.dataset.d); if (d > 0) Son.plus(); else Son.moins();
+  if (el.dataset.act === 'lv-v') Live.vitesse(0.5 * d); else Live.pente(0.5 * d);
+});
 document.addEventListener('click', function (ev) {
   var el = ev.target.closest('[data-act]'); if (!el || el.disabled) return;
+  if (el.dataset.act === 'lv-v' || el.dataset.act === 'lv-p') return;
+  if (el.tagName === 'BUTTON') Son.clic();
   var a = el.dataset.act, id = el.dataset.id;
   switch (a) {
     case 'pick': ui.profilSel = id; var r = $('retenir'); if (r) ui.retenir = r.checked; render(); break;
@@ -840,8 +917,6 @@ document.addEventListener('click', function (ev) {
     case 'lv-start': Live.demarrer(); break;
     case 'lv-pause': tapisPause().then(function (r) { if (r !== 1) toast('Mets en pause avec la console du tapis.'); }); break;
     case 'lv-resume': Live.reprendre(); break;
-    case 'lv-v': Live.vitesse(0.5 * Number(el.dataset.d)); break;
-    case 'lv-p': Live.pente(0.5 * Number(el.dataset.d)); break;
     case 'lv-end':
       if (!Live.s || !Live.s.debut) { Live.annuler(); go('accueil'); }
       else if (confirm('Terminer la séance et l\'enregistrer ?')) Live.fin('bouton');
@@ -876,7 +951,10 @@ document.addEventListener('click', function (ev) {
     }
   }
 });
-document.addEventListener('change', function (ev) { if (ev.target.id === 'retenir') ui.retenir = ev.target.checked; });
+document.addEventListener('change', function (ev) {
+  if (ev.target.id === 'retenir') ui.retenir = ev.target.checked;
+  if (ev.target.id === 'son') { localStorage.setItem('foulee:son', ev.target.checked ? '1' : '0'); if (ev.target.checked) Son.clic(); }
+});
 document.addEventListener('input', function (ev) { if (ev.target.id === 'nomModele' && route.params.id) ui.nomModele[route.params.id] = ev.target.value; });
 
 /* ---------- Démarrage ---------- */

@@ -1,5 +1,5 @@
 // Changer VERSION à chaque livraison : les téléphones installent la nouvelle version et l'appli se recharge seule.
-var VERSION = 'tapis-domyos-2026-10-06-2';
+var VERSION = 'tapis-domyos-2026-10-06-4';
 var FILES = ['./', 'index.html', 'app.js', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(VERSION).then(function (c) { return c.addAll(FILES.map(function (f) { return new Request(f, { cache: 'reload' }); })); })
