@@ -3,7 +3,7 @@
 'use strict';
 
 /* ---------- Constantes ---------- */
-var VERSION = '1.5';
+var VERSION = '1.6';
 var PROFILS = {
   kevin: { id: 'kevin', nom: 'Kévin', init: 'K', acc: '#2F56E0', ring: '#3D6BFF', soft: '#E3EAFF', ink: '#1E3FB0', pale: '#C9D6FF' },
   susan: { id: 'susan', nom: 'Susan', init: 'S', acc: '#C2401F', ring: '#FF7A55', soft: '#FFE4DC', ink: '#9A3216', pale: '#FFC9B8' }
@@ -309,7 +309,7 @@ function brancherFtms(server) {
 }
 function onBleDeco() {
   BLE.connected = false; BLE.cp = null; BLE.hasControl = false; majBle();
-  if (Live.s) Live.onDeco();
+  if (Live.s) { Live.s.resync = true; Live.s.decoAt = Date.now(); Live.s.lastDistT = null; Live.onDeco(); }
   if (!BLE.manuel) reconnecter(0);
 }
 /* Le tapis a décroché : on retente seul, sans demander à l'utilisateur. */
@@ -422,7 +422,7 @@ var Live = {
       debut: null, active: 0, dist: 0, elev: 0, vmax: 0, pSum: 0,
       kcal0: null, kcalLast: null, kcalAcc: 0, hrSum: 0, hrN: 0, hrMax: 0,
       courbe: [], bucket: { t: 0, sum: 0 }, changes: [], cible: { v: null, p: null }, initPending: null,
-      stepIdx: -1, paused: false, fini: false, lastTick: Date.now(), decompte: false, ref: null, libere: false, arreteAbsent: false
+      stepIdx: -1, paused: false, fini: false, lastTick: Date.now(), decompte: false, ref: null, libere: false, arreteAbsent: false, resync: false, decoAt: 0, lastDistT: null, calDist: null, aCorriger: false
     };
     BLE.data.kcal = null;
     clearInterval(Live.timer);
@@ -442,7 +442,7 @@ var Live = {
     var s = Live.s; if (!s || s.fini) return;
     var now = Date.now(), dt = Math.min(now - s.lastTick, 2000); s.lastTick = now;
     var v = BLE.connected ? BLE.data.speed : 0, p = BLE.data.incl || 0;
-    if (v > 0.05 && !s.debut) { s.debut = now; s.initPending = now; s.kcal0 = BLE.data.kcal; }
+    if (v > 0.05 && !s.debut) { s.debut = now; s.initPending = now; s.kcal0 = BLE.data.kcal; if (!BLE.data.distT) s.calDist = 0; }
     if (s.initPending && now - s.initPending >= 2000) {
       s.changes.push({ t: 0, v: s.cible.v != null ? s.cible.v : Math.round(v * 10) / 10, p: s.cible.p != null ? s.cible.p : p });
       s.initPending = null;
@@ -458,6 +458,7 @@ var Live = {
       var hr = BLE.data.hr; if (hr) { s.hrSum += hr; s.hrN++; s.hrMax = Math.max(s.hrMax, hr); }
     }
     Live.rattraper(now);
+    Live.resynchroniser();
     var k = BLE.data.kcal;
     if (k != null && s.debut) {
       if (s.kcal0 == null) s.kcal0 = k;
@@ -477,6 +478,19 @@ var Live = {
   rattraper: function (now) {
     var s = Live.s, d = BLE.data;
     if (!s.debut || !BLE.connected || now - d.recu > 2000 || d.tempsT == null) return;
+    // Recalage : quand le tapis passe un palier de 100 m, sa vraie distance vaut exactement ce palier.
+    if (d.distT != null) {
+      if (s.lastDistT != null && d.distT > s.lastDistT) {
+        var off = s.dist - d.distT;
+        if (s.aCorriger && s.calDist != null) {
+          var corr = off - s.calDist;
+          if (Math.abs(corr) < 150) { s.dist = Math.max(0, s.dist - corr); off = s.dist - d.distT; }
+          s.aCorriger = false;
+        }
+        s.calDist = off;
+      }
+      s.lastDistT = d.distT;
+    }
     var ref = s.ref;
     s.ref = { t: d.tempsT, d: d.distT || 0, a: s.active, dist: s.dist, v: d.speed };
     if (!ref) return;
@@ -500,8 +514,26 @@ var Live = {
       while (s.bucket.t >= 30000) { s.courbe.push(Math.round(vmoy * 10) / 10); s.bucket.t -= 30000; s.bucket.sum = vmoy * s.bucket.t; }
     }
     s.ref = { t: d.tempsT, d: d.distT || 0, a: s.active, dist: s.dist, v: d.speed };
-    s.libere = false;
+    s.libere = false; s.aCorriger = true;       // affinage au prochain palier de 100 m
     Live.sauver();
+  },
+  /* Après une coupure (appli en arrière-plan…), les changements faits sur la console
+     n'ont pas été reçus : on repart des valeurs réelles envoyées par le tapis. */
+  resynchroniser: function () {
+    var s = Live.s, d = BLE.data;
+    if (!s.resync || !BLE.connected || d.recu <= (s.decoAt || 0) + 300) return;
+    s.resync = false;
+    if (s.type === 'pilote') return;                // en séance guidée, l'appli renvoie elle-même l'étape
+    s.cible = { v: null, p: null };
+    if (!s.debut || d.speed < 0.05) { Live.majConsignes(); return; }
+    var v = Math.round(d.speed * 10) / 10, p = Math.round((d.incl || 0) * 2) / 2;
+    var cur = { v: null, p: null };
+    s.changes.forEach(function (c) { if (c.v != null) cur.v = c.v; if (c.p != null) cur.p = c.p; });
+    var c = { t: Math.round(s.active / 1000) };
+    if (cur.v !== v) c.v = v;
+    if (cur.p !== p) c.p = p;
+    if (c.v != null || c.p != null) s.changes.push(c);   // garde le modèle juste
+    Live.majConsignes(); Live.sauver();
   },
   sauver: function () {
     var s = Live.s; if (!s) return; s.saved = Date.now();
@@ -519,7 +551,12 @@ var Live = {
     var e = Live.etapes()[Live.s.stepIdx]; if (!e) return;
     cibleVitesse(e.v).then(function () { return ciblePente(e.p); });
   },
-  attendu: function (k, val) { if (Live.s) { Live.s.cible[k] = val; Live.majConsignes(); } },
+  attendu: function (k, val) {
+    if (!Live.s) return;
+    Live.s.cible[k] = val; Live.majConsignes();
+    var now = Date.now();
+    Live.envoyes = (Live.envoyes || []).filter(function (e) { return now - e.at < 4000; }).concat([{ k: k, v: val, at: now }]);
+  },
   majConsignes: function () {
     var s = Live.s; if (!s || !$('lvV')) return;
     var v = s.cible.v != null && s.debut && !s.paused ? s.cible.v : (BLE.connected ? BLE.data.speed : 0);
@@ -530,7 +567,11 @@ var Live = {
   onData: function () {},
   onConsole: function (k, val) {
     var s = Live.s; if (!s) return;
-    s.cible[k] = val; Live.majConsignes();
+    // Le tapis confirme chaque consigne envoyée par l'appli. Si une valeur plus récente
+    // a déjà été demandée, cet écho en retard ne doit pas l'écraser à l'écran.
+    var now = Date.now(), echo = (Live.envoyes || []).some(function (e) { return e.k === k && e.v === val && now - e.at < 4000; });
+    if (!(echo && s.cible[k] != null && s.cible[k] !== val)) s.cible[k] = val;
+    Live.majConsignes();
     if (s.debut && !s.initPending) {
       var c = { t: Math.round(s.active / 1000) }; c[k] = val;
       s.changes.push(c); Live.sauver();
