@@ -3,7 +3,7 @@
 'use strict';
 
 /* ---------- Constantes ---------- */
-var VERSION = '1.4';
+var VERSION = '1.5';
 var PROFILS = {
   kevin: { id: 'kevin', nom: 'Kévin', init: 'K', acc: '#2F56E0', ring: '#3D6BFF', soft: '#E3EAFF', ink: '#1E3FB0', pale: '#C9D6FF' },
   susan: { id: 'susan', nom: 'Susan', init: 'S', acc: '#C2401F', ring: '#FF7A55', soft: '#FFE4DC', ink: '#9A3216', pale: '#FFC9B8' }
@@ -193,9 +193,30 @@ document.addEventListener('focusout', function () { setTimeout(function () { if 
 window.addEventListener('online', function () { retry.n = 0; flush(); });
 document.addEventListener('visibilitychange', function () {
   if (!profil) return;
-  if (document.visibilityState === 'visible') { retry.n = 0; flush(); if (!BLE.connected && !BLE.connecting && !BLE.recherche) bleConnecter(false); }
-  else envoiDeSecours();
+  if (document.visibilityState === 'visible') { retry.n = 0; flush(); reprendreTapis(); }
+  else { envoiDeSecours(); lacherTapis(); }
 });
+function rendreEcran() { return localStorage.getItem('foulee:ecranTapis') !== '0'; }
+/* Appli en arrière-plan : on se déconnecte pour que la console du tapis
+   réaffiche ses propres chiffres (comme avec l'appli Decathlon en veille). */
+function lacherTapis() {
+  if (!rendreEcran() || !BLE.device || !BLE.connected) return;
+  BLE.manuel = true; BLE.libere = true;
+  if (Live.s) { Live.s.libere = true; Live.sauver(); }
+  try { BLE.device.gatt.disconnect(); } catch (e) {}
+}
+function reprendreTapis() {
+  if (BLE.libere && BLE.device) {
+    BLE.libere = false; BLE.manuel = false;
+    BLE.connecting = true; majBle();
+    connecterAppareil(BLE.device, true).then(function () {
+      BLE.connecting = false; BLE.connected = true; BLE.recherche = false; BLE.error = ''; majBle();
+      if (Live.s && Live.s.type === 'pilote' && Live.s.debut && !Live.s.paused) Live.appliquerEtape();
+    }).catch(function () { BLE.connecting = false; majBle(); reconnecter(0); });
+    return;
+  }
+  if (!BLE.connected && !BLE.connecting && !BLE.recherche) bleConnecter(false);
+}
 window.addEventListener('pagehide', envoiDeSecours);
 /* À la fermeture : envoi « au cas où » (les opérations sont rejouables sans risque, par id). */
 function envoiDeSecours() {
@@ -214,7 +235,7 @@ setInterval(function () { if (document.visibilityState === 'visible' && route.na
 var FTMS = 0x1826, HRS = 0x180D;
 var BLE = {
   device: null, cp: null, connected: false, connecting: false, hasControl: false, error: '',
-  data: { speed: 0, incl: 0, kcal: null, hr: null },
+  data: { speed: 0, incl: 0, kcal: null, hr: null, distT: null, tempsT: null, recu: 0 },
   speedRange: { min: VMIN, max: VMAX }, inclRange: { min: PMIN, max: PMAX }, waiter: null, chain: Promise.resolve()
 };
 function bleDispo() { return !!navigator.bluetooth; }
@@ -307,13 +328,16 @@ function onTreadmill(dv) {
     var o = 0, f = dv.getUint16(o, true); o += 2;
     if (!(f & 1)) { BLE.data.speed = dv.getUint16(o, true) / 100; o += 2; }
     if (f & 2) o += 2;
-    if (f & 4) o += 3;
+    if (f & 4) { BLE.data.distT = dv.getUint16(o, true) + (dv.getUint8(o + 2) << 16); o += 3; }
     if (f & 8) { BLE.data.incl = dv.getInt16(o, true) / 10; o += 4; }
     if (f & 16) o += 4;
     if (f & 32) o += 1;
     if (f & 64) o += 1;
     if (f & 128) { var k = dv.getUint16(o, true); BLE.data.kcal = k === 0xFFFF ? null : k; o += 5; }
     if (f & 256) { var h = dv.getUint8(o); if (h > 0) BLE.data.hr = h; o += 1; }
+    if (f & 512) o += 1;
+    if (f & 1024) { BLE.data.tempsT = dv.getUint16(o, true); o += 2; }
+    BLE.data.recu = Date.now();
   } catch (e) {}
   if (Live.s) Live.onData();
 }
@@ -398,7 +422,7 @@ var Live = {
       debut: null, active: 0, dist: 0, elev: 0, vmax: 0, pSum: 0,
       kcal0: null, kcalLast: null, kcalAcc: 0, hrSum: 0, hrN: 0, hrMax: 0,
       courbe: [], bucket: { t: 0, sum: 0 }, changes: [], cible: { v: null, p: null }, initPending: null,
-      stepIdx: -1, paused: false, fini: false, lastTick: Date.now(), decompte: false
+      stepIdx: -1, paused: false, fini: false, lastTick: Date.now(), decompte: false, ref: null, libere: false, arreteAbsent: false
     };
     BLE.data.kcal = null;
     clearInterval(Live.timer);
@@ -433,6 +457,7 @@ var Live = {
       if (s.bucket.t >= 30000) { s.courbe.push(Math.round(s.bucket.sum / s.bucket.t * 10) / 10); s.bucket = { t: 0, sum: 0 }; }
       var hr = BLE.data.hr; if (hr) { s.hrSum += hr; s.hrN++; s.hrMax = Math.max(s.hrMax, hr); }
     }
+    Live.rattraper(now);
     var k = BLE.data.kcal;
     if (k != null && s.debut) {
       if (s.kcal0 == null) s.kcal0 = k;
@@ -446,6 +471,37 @@ var Live = {
     }
     if (now - (s.saved || 0) > 4000) Live.sauver();
     if (route.name === 'live') Live.render();
+  },
+  /* Le tapis compte lui-même le temps et la distance : on s'en sert pour combler
+     les moments où l'appli était en arrière-plan (téléphone en veille, série…). */
+  rattraper: function (now) {
+    var s = Live.s, d = BLE.data;
+    if (!s.debut || !BLE.connected || now - d.recu > 2000 || d.tempsT == null) return;
+    var ref = s.ref;
+    s.ref = { t: d.tempsT, d: d.distT || 0, a: s.active, dist: s.dist, v: d.speed };
+    if (!ref) return;
+    var dT = d.tempsT - ref.t, dA = (s.active - ref.a) / 1000;
+    if (dT < -5) {                                   // compteurs du tapis remis à zéro
+      if (s.libere && d.speed < 0.05) { s.arreteAbsent = true; s.paused = true; }
+      return;
+    }
+    var manque = dT - dA;
+    if (manque < 3 || dT > 4 * 3600) return;
+    // Vitesse identique au départ et au retour : distance exacte (temps × vitesse).
+    // Sinon : distance comptée par le tapis (précise à 100 m près).
+    var dD = Math.abs(d.speed - ref.v) < 0.05 ? ref.v / 3.6 * manque
+      : Math.max(0, (d.distT || 0) - ref.d - (s.dist - ref.dist));
+    s.active += manque * 1000; s.dist += dD;
+    var p = d.incl || 0; if (p > 0) s.elev += dD * p / 100;
+    s.pSum += p * manque * 1000;
+    var vmoy = dD / manque * 3.6;
+    if (vmoy > 0.5) {
+      s.bucket.sum += vmoy * manque * 1000; s.bucket.t += manque * 1000;
+      while (s.bucket.t >= 30000) { s.courbe.push(Math.round(vmoy * 10) / 10); s.bucket.t -= 30000; s.bucket.sum = vmoy * s.bucket.t; }
+    }
+    s.ref = { t: d.tempsT, d: d.distT || 0, a: s.active, dist: s.dist, v: d.speed };
+    s.libere = false;
+    Live.sauver();
   },
   sauver: function () {
     var s = Live.s; if (!s) return; s.saved = Date.now();
@@ -542,6 +598,8 @@ var Live = {
     $('lvPace').textContent = allure(v);
     $('lvHr').textContent = BLE.data.hr || '–';
     Live.majConsignes();
+    var al = $('lvAlerte');
+    if (al) al.innerHTML = s.arreteAbsent ? '<div class="banner warn"><span>Le tapis a été arrêté pendant que l\'appli était en arrière-plan : la fin de la séance n\'a pas pu être récupérée. Touche Terminer pour enregistrer le reste.</span></div>' : '';
     $('lvDist').textContent = km(s.dist, 2);
     var frac, sub;
     if (s.type === 'pilote') {
@@ -747,6 +805,7 @@ var SCREENS = {
     return '<div class="stack" style="gap:14px;flex:1">' +
       '<div class="between"><div class="row">' + avatar(profil, 40) + '<div><div style="font-weight:700">' + esc(titre) + '</div><div class="small muted">' + profil.nom + (s.type === 'pilote' ? ' · séance guidée' : ' · course libre') + '</div></div></div><span data-ble>' + bleChip() + '</span></div>' +
       '<div data-ble-zone>' + bleZone() + '</div>' +
+      '<div id="lvAlerte"></div>' +
       '<div class="card" style="padding:16px"><div class="between small" style="margin-bottom:12px"><strong id="lvStep">–</strong><span class="muted num" id="lvRemain"></span></div>' +
         '<div class="bars" id="lvBars" style="height:72px"></div></div>' +
       '<div class="ring" style="width:196px;height:196px"><svg width="196" height="196" viewBox="0 0 196 196">' +
@@ -849,6 +908,7 @@ var SCREENS = {
       '<h1>Profil</h1>' +
       '<div class="card row" style="gap:16px">' + avatar(profil, 64) + '<div class="grow"><div style="font-size:22px;font-weight:800">' + profil.nom + '</div><div class="small muted">' + DB.seances.length + ' séance' + (DB.seances.length > 1 ? 's' : '') + ' enregistrée' + (DB.seances.length > 1 ? 's' : '') + '</div></div></div>' +
       '<button class="white full" data-act="changer-profil">Changer de profil</button>' +
+      '<div class="card"><label class="check" style="justify-content:space-between"><span><strong>Rendre l\'écran au tapis</strong><br><span class="small muted">Quand l\'appli passe en arrière-plan, la console du tapis réaffiche ses chiffres</span></span><input type="checkbox" id="ecranTapis" ' + (rendreEcran() ? 'checked' : '') + '></label></div>' +
       '<div class="card"><label class="check" style="justify-content:space-between"><span><strong>Sons et vibrations</strong><br><span class="small muted">Bip et vibration à chaque bouton</span></span><input type="checkbox" id="son" ' + (Son.actif() ? 'checked' : '') + '></label></div>' +
       '<div class="card stack" style="gap:10px"><div class="between"><h2>Tapis</h2><span data-ble>' + bleChip() + '</span></div>' +
         '<p class="small muted">' + (BLE.device ? esc(BLE.device.name || 'Tapis') : 'Aucun tapis mémorisé') + '</p>' +
@@ -960,6 +1020,7 @@ document.addEventListener('click', function (ev) {
 });
 document.addEventListener('change', function (ev) {
   if (ev.target.id === 'retenir') ui.retenir = ev.target.checked;
+  if (ev.target.id === 'ecranTapis') localStorage.setItem('foulee:ecranTapis', ev.target.checked ? '1' : '0');
   if (ev.target.id === 'son') { localStorage.setItem('foulee:son', ev.target.checked ? '1' : '0'); if (ev.target.checked) Son.clic(); }
 });
 document.addEventListener('input', function (ev) { if (ev.target.id === 'nomModele' && route.params.id) ui.nomModele[route.params.id] = ev.target.value; });
