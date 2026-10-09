@@ -3,7 +3,7 @@
 'use strict';
 
 /* ---------- Constantes ---------- */
-var VERSION = '1.6';
+var VERSION = '1.7';
 var PROFILS = {
   kevin: { id: 'kevin', nom: 'Kévin', init: 'K', acc: '#2F56E0', ring: '#3D6BFF', soft: '#E3EAFF', ink: '#1E3FB0', pale: '#C9D6FF' },
   susan: { id: 'susan', nom: 'Susan', init: 'S', acc: '#C2401F', ring: '#FF7A55', soft: '#FFE4DC', ink: '#9A3216', pale: '#FFC9B8' }
@@ -421,7 +421,7 @@ var Live = {
       type: cfg.type, prog: cfg.prog || null, offset: cfg.offset || 0,
       debut: null, active: 0, dist: 0, elev: 0, vmax: 0, pSum: 0,
       kcal0: null, kcalLast: null, kcalAcc: 0, hrSum: 0, hrN: 0, hrMax: 0,
-      courbe: [], bucket: { t: 0, sum: 0 }, changes: [], cible: { v: null, p: null }, initPending: null,
+      courbe: [], bucket: { t: 0, sum: 0, psum: 0 }, changes: [], cible: { v: null, p: null }, initPending: null,
       stepIdx: -1, paused: false, fini: false, lastTick: Date.now(), decompte: false, ref: null, libere: false, arreteAbsent: false, resync: false, decoAt: 0, lastDistT: null, calDist: null, aCorriger: false
     };
     BLE.data.kcal = null;
@@ -453,8 +453,8 @@ var Live = {
       var m = v / 3.6 * dt / 1000;
       s.dist += m; if (p > 0) s.elev += m * p / 100;
       s.vmax = Math.max(s.vmax, v); s.pSum += p * dt;
-      s.bucket.sum += v * dt; s.bucket.t += dt;
-      if (s.bucket.t >= 30000) { s.courbe.push(Math.round(s.bucket.sum / s.bucket.t * 10) / 10); s.bucket = { t: 0, sum: 0 }; }
+      s.bucket.sum += v * dt; s.bucket.psum = (s.bucket.psum || 0) + p * dt; s.bucket.t += dt;
+      if (s.bucket.t >= 30000) { s.courbe.push(pointBucket(s.bucket)); s.bucket = { t: 0, sum: 0, psum: 0 }; }
       var hr = BLE.data.hr; if (hr) { s.hrSum += hr; s.hrN++; s.hrMax = Math.max(s.hrMax, hr); }
     }
     Live.rattraper(now);
@@ -510,8 +510,8 @@ var Live = {
     s.pSum += p * manque * 1000;
     var vmoy = dD / manque * 3.6;
     if (vmoy > 0.5) {
-      s.bucket.sum += vmoy * manque * 1000; s.bucket.t += manque * 1000;
-      while (s.bucket.t >= 30000) { s.courbe.push(Math.round(vmoy * 10) / 10); s.bucket.t -= 30000; s.bucket.sum = vmoy * s.bucket.t; }
+      s.bucket.sum += vmoy * manque * 1000; s.bucket.psum = (s.bucket.psum || 0) + p * manque * 1000; s.bucket.t += manque * 1000;
+      while (s.bucket.t >= 30000) { s.courbe.push([Math.round(vmoy * 10) / 10, Math.round(p * 2) / 2]); s.bucket.t -= 30000; s.bucket.sum = vmoy * s.bucket.t; s.bucket.psum = p * s.bucket.t; }
     }
     s.ref = { t: d.tempsT, d: d.distT || 0, a: s.active, dist: s.dist, v: d.speed };
     s.libere = false; s.aCorriger = true;       // affinage au prochain palier de 100 m
@@ -616,7 +616,7 @@ var Live = {
     var s = Live.s; if (!s || s.fini) return;
     s.fini = true; clearInterval(Live.timer); wakeLock(false); localStorage.removeItem(LS.live);
     if (raison !== 'tapis' && BLE.connected && (BLE.data.speed > 0 || s.paused)) tapisStop();
-    if (s.bucket.t >= 5000) s.courbe.push(Math.round(s.bucket.sum / s.bucket.t * 10) / 10);
+    if (s.bucket.t >= 5000) s.courbe.push(pointBucket(s.bucket));
     var duree = Math.round(s.active / 1000);
     if (duree < 30) { Live.s = null; toast('Séance trop courte : elle n\'est pas enregistrée.'); go('accueil'); return; }
     var row = {
@@ -637,7 +637,8 @@ var Live = {
     var sec = s.active / 1000;
     $('lvTime').textContent = mmss(sec);
     $('lvPace').textContent = allure(v);
-    $('lvHr').textContent = BLE.data.hr || '–';
+    if (BLE.data.hr) { $('lvHrL').textContent = 'Cardio'; $('lvHr').textContent = BLE.data.hr; $('lvHr').style.color = '#C2401F'; }
+    else { $('lvHrL').textContent = 'Dénivelé'; $('lvHr').innerHTML = Math.round(s.elev) + '<small style="font-size:13px;color:var(--muted)"> m</small>'; $('lvHr').style.color = ''; }
     Live.majConsignes();
     var al = $('lvAlerte');
     if (al) al.innerHTML = s.arreteAbsent ? '<div class="banner warn"><span>Le tapis a été arrêté pendant que l\'appli était en arrière-plan : la fin de la séance n\'a pas pu être récupérée. Touche Terminer pour enregistrer le reste.</span></div>' : '';
@@ -649,12 +650,14 @@ var Live = {
       $('lvStep').textContent = s.debut ? (e.l || 'Étape') + ' · ' + fr(e.v, 1) + ' km/h' + (e.p ? ' · ' + fr(e.p, 1) + ' %' : '') : 'Prêt à démarrer';
       $('lvRemain').innerHTML = s.debut ? 'encore <strong style="color:var(--acc)">' + mmss(st.reste) + '</strong>' : mmss(tot);
       $('lvBars').innerHTML = barresEtapes(et, s.debut ? st.i : -1, 72);
+      $('lvLeg').innerHTML = legende(et.some(function (e) { return e.p >= 0.5; }));
     } else {
       frac = (s.dist % 1000) / 1000; sub = 'km';
-      var pts = s.courbe.slice(-39); if (s.bucket.t > 3000) pts.push(s.bucket.sum / s.bucket.t);
-      $('lvStep').textContent = 'Vitesse toutes les 30 s';
+      var pts = s.courbe.slice(-39); if (s.bucket.t > 3000) pts.push(pointBucket(s.bucket));
+      $('lvStep').textContent = 'Toutes les 30 s';
       $('lvRemain').textContent = s.debut ? '' : 'Démarre avec la console ou le bouton';
       $('lvBars').innerHTML = pts.length ? barresCourbe(pts, 72, true) : '<div class="muted small" style="align-self:center;width:100%;text-align:center">La courbe apparaîtra ici.</div>';
+      $('lvLeg').innerHTML = pts.length ? legende(aPente(pts)) : '';
     }
     $('lvRing').setAttribute('stroke-dashoffset', String(Math.round(528 * (1 - frac))));
     $('lvRingSub').textContent = sub;
@@ -677,21 +680,44 @@ function wakeLock(on) {
 document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && Live.s) wakeLock(true); });
 
 /* Barres : étapes d'un programme ou courbe de vitesse */
+/* Un point de courbe = [vitesse, pente] ; les anciennes séances n'ont que la vitesse. */
+function pointBucket(b) { return [Math.round(b.sum / b.t * 10) / 10, Math.round((b.psum || 0) / b.t * 2) / 2]; }
+function ptV(x) { return Array.isArray(x) ? x[0] : x; }
+function ptP(x) { return Array.isArray(x) ? x[1] : null; }
+var COUL_PENTE = '#0F766E';
+/* Ligne en escalier de la pente, posée sur les barres (échelle fixe 0 à 10 %). */
+function lignePente(segs) {
+  if (!segs.some(function (g) { return g.p != null && g.p >= 0.5; })) return '';
+  var W = segs.reduce(function (a, g) { return a + g.w; }, 0), x = 0, d = '';
+  segs.forEach(function (g, i) {
+    var y = (94 - clamp(g.p || 0, 0, PMAX) / PMAX * 86).toFixed(1);
+    d += (i ? 'L' : 'M') + x.toFixed(2) + ' ' + y + 'L' + (x + g.w).toFixed(2) + ' ' + y;
+    x += g.w;
+  });
+  return '<svg viewBox="0 0 ' + W + ' 100" preserveAspectRatio="none" aria-hidden="true" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible">' +
+    '<path d="' + d + '" fill="none" stroke="#fff" stroke-width="5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>' +
+    '<path d="' + d + '" fill="none" stroke="' + COUL_PENTE + '" stroke-width="2.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>';
+}
+function legende(avecPente) {
+  return '<div class="row small muted" style="gap:14px;margin-top:8px;font-size:12px"><span class="row" style="gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:var(--acc-pale)"></span>Vitesse</span>' +
+    (avecPente ? '<span class="row" style="gap:6px"><span style="width:14px;height:3px;border-radius:2px;background:' + COUL_PENTE + '"></span>Pente (0 à 10 %)</span>' : '') + '</div>';
+}
 function barresEtapes(et, cur, h) {
   var vmax = Math.max.apply(null, et.map(function (e) { return e.v; }).concat([1]));
   return et.map(function (e, i) {
     var col = cur < 0 ? 'var(--acc-pale)' : i < cur ? 'var(--acc-ring)' : i === cur ? 'var(--acc-pale)' : 'var(--track)';
     if (cur >= 0 && i === cur) col = 'var(--acc)';
     return '<div style="flex:' + e.d + ' 1 0;height:' + Math.max(6, Math.round(e.v / vmax * h)) + 'px;background:' + col + '"></div>';
-  }).join('');
+  }).join('') + lignePente(et.map(function (e) { return { w: e.d, p: e.p }; }));
 }
 function barresCourbe(pts, h, live) {
-  var vmax = Math.max.apply(null, pts.concat([6]));
-  return pts.map(function (v, i) {
+  var vmax = Math.max.apply(null, pts.map(ptV).concat([6]));
+  return pts.map(function (x, i) {
     var last = live && i === pts.length - 1;
-    return '<div style="flex:1 1 0;height:' + Math.max(4, Math.round(v / vmax * h)) + 'px;background:' + (last ? 'var(--acc)' : 'var(--acc-pale)') + '"></div>';
-  }).join('');
+    return '<div style="flex:1 1 0;height:' + Math.max(4, Math.round(ptV(x) / vmax * h)) + 'px;background:' + (last ? 'var(--acc)' : 'var(--acc-pale)') + '"></div>';
+  }).join('') + lignePente(pts.map(function (x) { return { w: 1, p: ptP(x) }; }));
 }
+function aPente(pts) { return pts.some(function (x) { return (ptP(x) || 0) >= 0.5; }); }
 
 /* Changements enregistrés → étapes d'un modèle */
 function versEtapes(changes, duree) {
@@ -789,7 +815,7 @@ var SCREENS = {
       '<button class="card" data-act="libre" style="border:0;text-align:left;font:inherit;color:#fff;background:var(--acc);display:flex;justify-content:space-between;align-items:center;min-height:110px;cursor:pointer">' +
         '<div><div style="font-size:22px;font-weight:800">Course libre</div><div style="opacity:.85;font-size:14px;margin-top:4px">Tu règles le tapis, l\'appli enregistre tout.</div></div>' + ICON.next + '</button>' +
       '<button class="item" data-act="tab" data-to="seances"><div class="ic">' + ICON.star + '</div><div class="grow"><div class="t">Séance guidée</div><div class="s">Le tapis change vitesse et pente pour toi</div></div>' + ICON.next + '</button>' +
-      '<div class="card"><div class="between"><h2>Cette semaine</h2><span class="small muted">' + list.length + ' séance' + (list.length > 1 ? 's' : '') + '</span></div>' +
+      '<div class="card"><div class="between"><h2>Cette semaine</h2><span class="small muted">' + list.length + ' séance' + (list.length > 1 ? 's' : '') + (somme(list, 'denivele') ? ' · ' + Math.round(somme(list, 'denivele')) + ' m D+' : '') + '</span></div>' +
         '<div style="font-size:36px;font-weight:800;letter-spacing:-0.02em;margin-top:4px" class="num">' + km(somme(list, 'distance')) + ' <span class="muted" style="font-size:16px">km</span></div>' +
         '<div style="display:flex;gap:8px;margin-top:8px">' + bars + '</div></div>' +
       (last ? '<div class="stack" style="gap:10px"><h2>Dernière séance</h2>' + seanceItem(last) + '</div>' : '') +
@@ -824,7 +850,7 @@ var SCREENS = {
     return '<div class="stack">' + backBar('', 'seances') +
       '<div><h1>' + esc(p.nom) + '</h1><p class="muted" style="margin-top:4px">' + esc(p.desc || '') + '</p></div>' +
       '<div class="card"><div class="between small muted"><span>' + dureeTxt(totalDuree(et)) + '</span><span>environ ' + km(dist, 1) + ' km</span></div>' +
-        '<div class="bars" style="height:80px;margin-top:12px">' + barresEtapes(et, -1, 80) + '</div></div>' +
+        '<div class="bars" style="height:80px;margin-top:12px">' + barresEtapes(et, -1, 80) + '</div>' + legende(et.some(function (e) { return e.p >= 0.5; })) + '</div>' +
       '<div class="card"><div class="between"><div><h2>Intensité</h2><div class="small muted">Décale toutes les vitesses</div></div>' +
         '<div class="row"><button class="white" data-act="off" data-d="-0.5" aria-label="Moins vite" style="width:48px;padding:0">' + ICON.minus + '</button>' +
         '<strong class="num" style="min-width:74px;text-align:center">' + (off > 0 ? '+' : '') + fr(off, 1) + ' km/h</strong>' +
@@ -848,7 +874,7 @@ var SCREENS = {
       '<div data-ble-zone>' + bleZone() + '</div>' +
       '<div id="lvAlerte"></div>' +
       '<div class="card" style="padding:16px"><div class="between small" style="margin-bottom:12px"><strong id="lvStep">–</strong><span class="muted num" id="lvRemain"></span></div>' +
-        '<div class="bars" id="lvBars" style="height:72px"></div></div>' +
+        '<div class="bars" id="lvBars" style="height:72px"></div><div id="lvLeg"></div></div>' +
       '<div class="ring" style="width:196px;height:196px"><svg width="196" height="196" viewBox="0 0 196 196">' +
         '<circle cx="98" cy="98" r="84" fill="#fff" stroke="var(--track)" stroke-width="14"/>' +
         '<circle id="lvRing" cx="98" cy="98" r="84" fill="none" stroke="var(--acc-ring)" stroke-width="14" stroke-linecap="round" stroke-dasharray="528" stroke-dashoffset="528" transform="rotate(-90 98 98)"/></svg>' +
@@ -856,7 +882,7 @@ var SCREENS = {
       '<div class="card grid3" style="padding:14px 6px;text-align:center;gap:0">' +
         '<div><div class="small muted">Temps</div><div class="num" id="lvTime" style="font-size:22px;font-weight:800">0:00</div></div>' +
         '<div style="border-left:1px solid var(--line);border-right:1px solid var(--line)"><div class="small muted">Allure</div><div class="num" id="lvPace" style="font-size:22px;font-weight:800">–</div></div>' +
-        '<div><div class="small muted">Cardio</div><div class="num" id="lvHr" style="font-size:22px;font-weight:800;color:#C2401F">–</div></div></div>' +
+        '<div><div class="small muted" id="lvHrL">Dénivelé</div><div class="num" id="lvHr" style="font-size:22px;font-weight:800">–</div></div></div>' +
       '<div class="grid2">' + ctrl('Vitesse', 'lvV', 'lvVm', 'lvVp', 'lv-v') + ctrl('Pente', 'lvP', 'lvPm', 'lvPp', 'lv-p') + '</div>' +
       '<div class="row" style="margin-top:auto;gap:12px"><button class="primary big" id="lvMain" style="flex:1">–</button><button class="white big" data-act="lv-end">Terminer</button></div>' +
       '</div>';
@@ -899,8 +925,9 @@ var SCREENS = {
     var futur = b > new Date();
     var delta = dprev > 0 ? Math.round((dist - dprev) / dprev * 100) : null;
     var groups = [];
-    if (mois) { for (var w = weekStart(a); w < b; w = addDays(w, 7)) groups.push({ l: dateCourte(w > a ? w : a), v: somme(seancesEntre(w < a ? a : w, addDays(w, 7) > b ? b : addDays(w, 7)), 'distance') }); }
-    else for (var i = 0; i < 7; i++) { var d0 = addDays(a, i); groups.push({ l: 'LMMJVSD'[i], v: somme(seancesEntre(d0, addDays(d0, 1)), 'distance') }); }
+    if (mois) { for (var w = weekStart(a); w < b; w = addDays(w, 7)) { var wl = seancesEntre(w < a ? a : w, addDays(w, 7) > b ? b : addDays(w, 7)); groups.push({ l: dateCourte(w > a ? w : a), v: somme(wl, 'distance'), dp: somme(wl, 'denivele') }); } }
+    else for (var i = 0; i < 7; i++) { var d0 = addDays(a, i), dl = seancesEntre(d0, addDays(d0, 1)); groups.push({ l: 'LMMJVSD'[i], v: somme(dl, 'distance'), dp: somme(dl, 'denivele') }); }
+    var dplus = somme(list, 'denivele'), dpPrev = somme(prev, 'denivele');
     var gmax = Math.max.apply(null, groups.map(function (g) { return g.v; }).concat([1]));
     var bars = groups.map(function (g) {
       return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:6px;height:118px;min-width:0">' +
@@ -934,6 +961,7 @@ var SCREENS = {
         '<div class="tile"><div class="l">Temps</div><div class="v num">' + dureeTxt(duree) + '</div></div>' +
         '<div class="tile"><div class="l">Allure moyenne</div><div class="v num">' + (duree ? allure(dist / duree * 3.6) : '–') + '</div></div>' +
         '<div class="tile"><div class="l">Calories</div><div class="v num">' + (kcal ? Math.round(kcal) : '–') + '</div></div></div>' +
+      carteDenivele(dplus, dpPrev, groups, mois) +
       cal +
       '<div class="stack" style="gap:10px"><h2>Séances</h2>' + (list.length ? list.sort(function (x, y) { return String(y.debut).localeCompare(String(x.debut)); }).map(seanceItem).join('') : '<div class="card empty">Aucune séance sur cette période.</div>') + '</div>' +
       '</div>';
@@ -966,7 +994,31 @@ function puceSauvegarde() {
   var attente = outbox().some(function (o) { return o.profil === profil.id; });
   if (!attente) return '<span class="chip ok"><i></i>Séance enregistrée dans le Sheet</span>';
   if (syncState.busy || !syncState.error) return '<span class="chip warn"><i></i>Envoi au Sheet…</span>';
-  return '<span class="chip warn"><i></i>Pas de réseau : en attente, envoi automatique dès que possible</span>';
+  return '<span class="chip warn" style="white-space:normal;line-height:1.3"><i style="flex-shrink:0"></i>Pas de réseau : en attente, envoi automatique dès que possible</span>';
+}
+/* Dénivelé : distance parcourue × pente (ex. 1 km à 5 % = 50 m de montée). */
+function equivalence(m) {
+  if (m >= 4806) return '≈ ' + fr(m / 4806, 1) + ' × le mont Blanc';
+  if (m >= 330) return '≈ ' + fr(m / 330, 1) + ' × la tour Eiffel';
+  if (m >= 100) return '≈ ' + Math.round(m / 3) + ' étages';
+  return '';
+}
+function carteDenivele(dp, dpPrev, groups, mois) {
+  var max = Math.max.apply(null, groups.map(function (g) { return g.dp; }).concat([1]));
+  var delta = dpPrev > 0 ? Math.round((dp - dpPrev) / dpPrev * 100) : null;
+  var bars = groups.map(function (g) {
+    return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:6px;height:92px;min-width:0">' +
+      '<div class="num" style="font-size:11px;font-weight:700">' + (g.dp ? Math.round(g.dp) : '') + '</div>' +
+      '<div style="width:100%;border-radius:8px;height:' + (g.dp ? Math.max(8, Math.round(g.dp / max * 52)) : 4) + 'px;background:' + (g.dp ? COUL_PENTE : 'var(--track)') + ';opacity:' + (g.dp && g.dp < max ? '.55' : '1') + '"></div>' +
+      '<div style="font-size:11px;color:var(--muted);white-space:nowrap">' + g.l + '</div></div>';
+  }).join('');
+  var eq = equivalence(dp);
+  return '<div class="card"><div class="between" style="align-items:flex-start"><div><div class="small muted" style="font-weight:600">Dénivelé positif</div>' +
+    '<div class="num" style="font-size:36px;font-weight:800;letter-spacing:-0.02em">' + Math.round(dp) + ' <span class="muted" style="font-size:16px">m</span></div>' +
+    (eq ? '<div class="small muted">' + eq + '</div>' : '') + '</div>' +
+    (delta != null ? '<span class="chip ' + (delta >= 0 ? 'ok' : 'warn') + '">' + (delta >= 0 ? '+' : '') + delta + ' %</span>' : '') + '</div>' +
+    (dp ? '<div style="display:flex;gap:' + (mois ? 12 : 8) + 'px;margin-top:8px">' + bars + '</div>'
+        : '<p class="small muted" style="margin-top:8px">Mets de la pente pendant tes séances pour faire grimper ce compteur.</p>') + '</div>';
 }
 function statsSeance(x) {
   var tiles = [
@@ -977,7 +1029,7 @@ function statsSeance(x) {
   if (x.fcMoy) tiles.push(['Cardio moyen', x.fcMoy + ' <small>bpm</small>'], ['Cardio max', x.fcMax + ' <small>bpm</small>']);
   var c = x.courbe || [];
   return '<div class="grid2">' + tiles.map(function (t) { return '<div class="tile"><div class="l">' + t[0] + '</div><div class="v num">' + t[1] + '</div></div>'; }).join('') + '</div>' +
-    (c.length ? '<div class="card"><div class="small muted" style="font-weight:600;margin-bottom:10px">Vitesse au fil de la séance</div><div class="bars" style="height:70px">' + barresCourbe(c, 70, false) + '</div></div>' : '');
+    (c.length ? '<div class="card"><div class="small muted" style="font-weight:600;margin-bottom:10px">' + (aPente(c) ? 'Vitesse et pente' : 'Vitesse') + ' au fil de la séance</div><div class="bars" style="height:90px">' + barresCourbe(c, 90, false) + '</div>' + legende(aPente(c)) + '</div>' : '');
 }
 
 /* ---------- Actions ---------- */
