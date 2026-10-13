@@ -3,7 +3,7 @@
 'use strict';
 
 /* ---------- Constantes ---------- */
-var VERSION = '1.8';
+var VERSION = '1.9';
 var PROFILS = {
   kevin: { id: 'kevin', nom: 'Kévin', init: 'K', acc: '#2F56E0', ring: '#3D6BFF', soft: '#E3EAFF', ink: '#1E3FB0', pale: '#C9D6FF' },
   susan: { id: 'susan', nom: 'Susan', init: 'S', acc: '#C2401F', ring: '#FF7A55', soft: '#FFE4DC', ink: '#9A3216', pale: '#FFC9B8' }
@@ -16,6 +16,16 @@ var PROGRAMMES = [
              { d: 240, v: 10, p: 1, l: 'Palier 3' }, { d: 240, v: 11, p: 1, l: 'Palier 4' }, { d: 240, v: 6, p: 0, l: 'Retour au calme' }] },
   { id: 'p-cote', nom: 'Marche en côte', desc: 'Marche rapide, la pente alterne',
     etapes: [{ d: 300, v: 5, p: 1, l: 'Échauffement' }].concat(repeat(4, [{ d: 180, v: 5.5, p: 6, l: 'Côte' }, { d: 120, v: 5, p: 10, l: 'Forte côte' }]), [{ d: 300, v: 4.5, p: 0, l: 'Retour au calme' }]) }
+];
+var TESTS = [
+  { id: 't-pilotage', nom: 'Test 1 · Pilotage (1 min 30)', desc: 'L\'appli change vitesse et pente toute seule. Ne touche à rien.',
+    etapes: [{ d: 30, v: 4, p: 0, l: 'Ne touche à rien' }, { d: 30, v: 6, p: 2, l: 'Vitesse et pente montent' }, { d: 30, v: 5, p: 0, l: 'Ça redescend, puis fin' }] },
+  { id: 't-aller-retour', nom: 'Test 2 · Aller-retour (2 min)', desc: 'Passe sur une autre appli pendant 1 min, puis reviens.',
+    etapes: [{ d: 30, v: 5, p: 0, l: 'Reste sur l\'appli' }, { d: 60, v: 5, p: 0, l: 'Va sur une autre appli, reviens dans 1 min' }, { d: 30, v: 5, p: 0, l: 'Vérifie le temps et la distance' }] },
+  { id: 't-notif', nom: 'Test 3 · Notification (2 min max)', desc: 'Termine depuis la notification, sans revenir dans l\'appli.',
+    etapes: [{ d: 30, v: 5, p: 0, l: 'Reste sur l\'appli' }, { d: 90, v: 5, p: 0, l: 'Autre appli, puis « Terminer et enregistrer »' }] },
+  { id: 't-stop', nom: 'Test 4 · Stop sur la console (1 min 30)', desc: 'Va sur une autre appli, appuie sur Stop, puis reviens.',
+    etapes: [{ d: 30, v: 5, p: 0, l: 'Reste sur l\'appli' }, { d: 60, v: 5, p: 0, l: 'Autre appli, Stop sur la console, reviens' }] }
 ];
 var VMIN = 1, VMAX = 18, PMIN = 0, PMAX = 10;
 var LS = {
@@ -193,7 +203,10 @@ document.addEventListener('focusout', function () { setTimeout(function () { if 
 window.addEventListener('online', function () { retry.n = 0; flush(); });
 document.addEventListener('visibilitychange', function () {
   if (!profil) return;
-  if (document.visibilityState === 'visible') { retry.n = 0; flush(); reprendreTapis(); fermerNotif(); }
+  if (document.visibilityState === 'visible') {
+    retry.n = 0; flush(); fermerNotif();
+    if (Live.s && Live.s.debut && BLE.libere && !Live.s.finDemandee) questionRetour(); else reprendreTapis();
+  }
   else { envoiDeSecours(); lacherTapis(); afficherNotif(); }
 });
 /* Notification « séance en cours » quand l'appli passe en arrière-plan :
@@ -228,7 +241,22 @@ function lacherTapis() {
   if (Live.s) { Live.s.libere = true; Live.sauver(); }
   try { BLE.device.gatt.disconnect(); } catch (e) {}
 }
+/* Retour dans l'appli pendant une séance : on demande avant de se reconnecter,
+   car la reconnexion efface le bilan affiché par la console du tapis. */
+function questionRetour() {
+  if ($('ovRetour')) return;
+  var ov = document.createElement('div');
+  ov.className = 'overlay'; ov.id = 'ovRetour';
+  ov.innerHTML = '<div class="card stack" style="max-width:360px;margin:0 20px;gap:12px">' +
+    '<h2 style="font-size:20px">Le tapis tourne encore&nbsp;?</h2>' +
+    '<button class="primary big full" data-act="retour-court">Oui, je cours encore</button>' +
+    '<button class="white big full" data-act="retour-arret">Non, je l\'ai arrêté</button>' +
+    '<p class="small muted">Si tu l\'as arrêté, l\'appli ne se reconnecte pas tout de suite : la console garde son bilan, que tu vas recopier.</p></div>';
+  document.body.appendChild(ov);
+}
+function fermerQuestion() { var o = $('ovRetour'); if (o) o.remove(); }
 function reprendreTapis() {
+  if (route.name === 'saisie') return;              // ne pas effacer le bilan de la console pendant la saisie
   if (BLE.libere && BLE.device) {
     BLE.libere = false; BLE.manuel = false;
     BLE.connecting = true; majBle();
@@ -633,7 +661,7 @@ var Live = {
     jset(LS.saisie, { profil: profil.id, pre: pre });
     go('saisie');
   },
-  demandeFin: function () { if (Live.s && Live.s.debut) Live.s.finDemandee = Date.now(); else if (Live.s) { Live.annuler(); go('accueil'); } },
+  demandeFin: function () { fermerQuestion(); if (Live.s && Live.s.debut) { Live.s.finDemandee = Date.now(); reprendreTapis(); } else if (Live.s) { Live.annuler(); go('accueil'); } },
   demarrer: function () {
     var s = Live.s; if (!s || s.decompte) return;
     if (!BLE.connected) { toast('Connecte d\'abord le tapis.'); return; }
@@ -816,7 +844,7 @@ function seancesEntre(a, b) { return DB.seances.filter(function (x) { var d = ne
 function somme(list, k) { return list.reduce(function (a, x) { return a + (Number(x[k]) || 0); }, 0); }
 function tousModeles() { return DB.modeles.slice().sort(function (a, b) { return String(b.creeLe).localeCompare(String(a.creeLe)); }); }
 function trouverProg(id) {
-  var p = PROGRAMMES.filter(function (x) { return x.id === id; })[0];
+  var p = PROGRAMMES.concat(TESTS).filter(function (x) { return x.id === id; })[0];
   if (p) return p;
   var m = DB.modeles.filter(function (x) { return x.id === id; })[0];
   return m ? { id: m.id, nom: m.nom, desc: 'Ton modèle', etapes: m.etapes || [], modele: true } : null;
@@ -885,6 +913,7 @@ var SCREENS = {
     return '<div class="stack">' +
       '<h1>Séances</h1>' +
       '<div class="stack" style="gap:10px"><h2>Programmes</h2>' + PROGRAMMES.map(progItem).join('') + '</div>' +
+      (profil.id === 'kevin' ? '<div class="stack" style="gap:10px"><h2>Tests (Kévin)</h2>' + TESTS.map(progItem).join('') + '</div>' : '') +
       '<div class="stack" style="gap:10px"><h2>Mes modèles</h2>' +
         (mods.length ? mods.map(function (m) { return progItem({ id: m.id, nom: m.nom, desc: 'Enregistré le ' + dateCourte(m.creeLe), etapes: m.etapes || [] }); }).join('')
           : '<div class="card empty">Fais une course libre en réglant le tapis avec sa console, puis touche « Enregistrer comme modèle » à la fin. Elle apparaîtra ici et le tapis la rejouera tout seul.</div>') +
@@ -1185,6 +1214,11 @@ document.addEventListener('click', function (ev) {
     }
     case 'tab': go(el.dataset.to); break;
     case 'pt': infoPoint(el.dataset.id, Number(el.dataset.i)); break;
+    case 'retour-court': fermerQuestion(); reprendreTapis(); break;
+    case 'retour-arret':
+      fermerQuestion();
+      if (Live.s) { Live.s.perte = Live.s.perte || (Live.s.ref && Live.s.ref.at) || Date.now(); BLE.libere = false; Live.versSaisie(); }
+      break;
     case 'save-saisie': {
       var x = jget(LS.saisie, null), pre = x && x.profil === profil.id ? x.pre : null;
       var num = function (id) { var v = ($(id).value || '').trim().replace(',', '.'); return v === '' ? null : Number(v); };
@@ -1200,6 +1234,7 @@ document.addEventListener('click', function (ev) {
         courbe: [], changements: [], majLe: new Date().toISOString() };
       commit({ op: 'put', t: 'Seances', row: row });
       localStorage.removeItem(LS.saisie);
+      BLE.manuel = false;
       go('fin', { id: row.id });
       break;
     }
