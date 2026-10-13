@@ -3,7 +3,7 @@
 'use strict';
 
 /* ---------- Constantes ---------- */
-var VERSION = '1.7';
+var VERSION = '1.8';
 var PROFILS = {
   kevin: { id: 'kevin', nom: 'Kévin', init: 'K', acc: '#2F56E0', ring: '#3D6BFF', soft: '#E3EAFF', ink: '#1E3FB0', pale: '#C9D6FF' },
   susan: { id: 'susan', nom: 'Susan', init: 'S', acc: '#C2401F', ring: '#FF7A55', soft: '#FFE4DC', ink: '#9A3216', pale: '#FFC9B8' }
@@ -19,7 +19,7 @@ var PROGRAMMES = [
 ];
 var VMIN = 1, VMAX = 18, PMIN = 0, PMAX = 10;
 var LS = {
-  profil: 'foulee:profil', code: 'foulee:code', outbox: 'foulee:outbox', sync: 'foulee:sync', live: 'foulee:live',
+  profil: 'foulee:profil', code: 'foulee:code', outbox: 'foulee:outbox', sync: 'foulee:sync', live: 'foulee:live', saisie: 'foulee:saisie',
   data: function (p) { return 'foulee:data:' + p; }, offset: function (p, prog) { return 'foulee:offset:' + p + ':' + prog; }
 };
 var API_URL = (window.FOULEE_CONFIG && window.FOULEE_CONFIG.apiUrl) || '';
@@ -193,8 +193,31 @@ document.addEventListener('focusout', function () { setTimeout(function () { if 
 window.addEventListener('online', function () { retry.n = 0; flush(); });
 document.addEventListener('visibilitychange', function () {
   if (!profil) return;
-  if (document.visibilityState === 'visible') { retry.n = 0; flush(); reprendreTapis(); }
-  else { envoiDeSecours(); lacherTapis(); }
+  if (document.visibilityState === 'visible') { retry.n = 0; flush(); reprendreTapis(); fermerNotif(); }
+  else { envoiDeSecours(); lacherTapis(); afficherNotif(); }
+});
+/* Notification « séance en cours » quand l'appli passe en arrière-plan :
+   depuis Netflix, on la touche pour revenir, ou « Terminer et enregistrer ». */
+function demanderNotif() {
+  try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } catch (e) {}
+}
+function afficherNotif() {
+  try {
+    if (!Live.s || !Live.s.debut || !('Notification' in window) || Notification.permission !== 'granted' || !navigator.serviceWorker) return;
+    navigator.serviceWorker.ready.then(function (reg) {
+      reg.showNotification('Séance en cours · ' + profil.nom, {
+        body: 'Avant d\'arrêter le tapis, touche « Terminer et enregistrer ».', tag: 'seance', renotify: false,
+        requireInteraction: true, silent: true, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png',
+        actions: [{ action: 'terminer', title: 'Terminer et enregistrer' }, { action: 'ouvrir', title: 'Ouvrir' }]
+      });
+    }).catch(function () {});
+  } catch (e) {}
+}
+function fermerNotif() {
+  try { if (navigator.serviceWorker) navigator.serviceWorker.ready.then(function (reg) { return reg.getNotifications({ tag: 'seance' }); }).then(function (ns) { (ns || []).forEach(function (n) { n.close(); }); }).catch(function () {}); } catch (e) {}
+}
+if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', function (ev) {
+  if (ev.data && ev.data.terminer) Live.demandeFin();
 });
 function rendreEcran() { return localStorage.getItem('foulee:ecranTapis') !== '0'; }
 /* Appli en arrière-plan : on se déconnecte pour que la console du tapis
@@ -458,7 +481,11 @@ var Live = {
       var hr = BLE.data.hr; if (hr) { s.hrSum += hr; s.hrN++; s.hrMax = Math.max(s.hrMax, hr); }
     }
     Live.rattraper(now);
+    if (Live.finAuto === 'arret') { Live.finAuto = null; Live.versSaisie(); return; }
     Live.resynchroniser();
+    if (s.finDemandee && ((BLE.connected && BLE.data.recu > (s.decoAt || 0) + 300 && !s.resync) || now - s.finDemandee > 12000)) { Live.fin('bouton'); return; }
+    if (s.restaureeAt && BLE.connected) s.restaureeAt = null;
+    if (s.restaureeAt && !BLE.connected && now - s.restaureeAt > 20000 && now - (s.restaureeDe || now) > 30 * 60000) { Live.fin('restauree'); return; }
     var k = BLE.data.kcal;
     if (k != null && s.debut) {
       if (s.kcal0 == null) s.kcal0 = k;
@@ -477,7 +504,7 @@ var Live = {
      les moments où l'appli était en arrière-plan (téléphone en veille, série…). */
   rattraper: function (now) {
     var s = Live.s, d = BLE.data;
-    if (!s.debut || !BLE.connected || now - d.recu > 2000 || d.tempsT == null) return;
+    if (!s.debut || !BLE.connected || now - d.recu > 2000 || d.tempsT == null || d.recu <= (s.decoAt || 0) + 300) return;
     // Recalage : quand le tapis passe un palier de 100 m, sa vraie distance vaut exactement ce palier.
     if (d.distT != null) {
       if (s.lastDistT != null && d.distT > s.lastDistT) {
@@ -492,29 +519,36 @@ var Live = {
       s.lastDistT = d.distT;
     }
     var ref = s.ref;
-    s.ref = { t: d.tempsT, d: d.distT || 0, a: s.active, dist: s.dist, v: d.speed };
+    s.ref = { t: d.tempsT, d: d.distT || 0, a: s.active, dist: s.dist, v: d.speed, p: d.incl || 0, at: now };
     if (!ref) return;
     var dT = d.tempsT - ref.t, dA = (s.active - ref.a) / 1000;
-    if (dT < -5) {                                   // compteurs du tapis remis à zéro
-      if (s.libere && d.speed < 0.05) { s.arreteAbsent = true; s.paused = true; }
-      return;
+    var depuis = Math.max(0, s.dist - ref.dist);          // déjà compté par l'appli depuis ref
+    var vraieRef = s.calDist != null ? ref.dist - s.calDist : ref.d;   // distance réelle du tapis au moment de ref
+    if (dT < 0) {
+      // Compteurs du tapis remis à zéro (le temps du tapis ne recule jamais sinon) pendant l'absence : il a été arrêté.
+      s.perte = s.perte || ref.at || now;
+      if (d.speed < 0.05) { s.arreteAbsent = true; Live.finAuto = 'arret'; return; }
+      // … puis relancé : on ajoute ce qu'il a compté depuis la relance.
+      dT = d.tempsT; dA = 0; vraieRef = 0; depuis = 0; ref = { t: 0, d: 0, v: d.speed, p: d.incl || 0 };
     }
     var manque = dT - dA;
     if (manque < 3 || dT > 4 * 3600) return;
-    // Vitesse identique au départ et au retour : distance exacte (temps × vitesse).
-    // Sinon : distance comptée par le tapis (précise à 100 m près).
-    var dD = Math.abs(d.speed - ref.v) < 0.05 ? ref.v / 3.6 * manque
-      : Math.max(0, (d.distT || 0) - ref.d - (s.dist - ref.dist));
+    // Distance manquante : bornée par le compteur du tapis (paliers de 100 m).
+    var bas = Math.max(0, (d.distT || 0) - vraieRef - depuis), haut = bas + 100;
+    var vitesseIdentique = Math.abs(d.speed - ref.v) < 0.05;
+    // Estimation : vitesse moyenne entre le départ et le retour, encadrée par le compteur du tapis.
+    var dD = clamp(manque * (ref.v + d.speed) / 2 / 3.6, bas, haut);
+    dD = clamp(dD, 0, manque * VMAX / 3.6);
+    var pMoy = ((ref.p || 0) + (d.incl || 0)) / 2;           // pente pendant l'absence : inconnue, on prend la moyenne départ / retour
     s.active += manque * 1000; s.dist += dD;
-    var p = d.incl || 0; if (p > 0) s.elev += dD * p / 100;
-    s.pSum += p * manque * 1000;
-    var vmoy = dD / manque * 3.6;
-    if (vmoy > 0.5) {
-      s.bucket.sum += vmoy * manque * 1000; s.bucket.psum = (s.bucket.psum || 0) + p * manque * 1000; s.bucket.t += manque * 1000;
-      while (s.bucket.t >= 30000) { s.courbe.push([Math.round(vmoy * 10) / 10, Math.round(p * 2) / 2]); s.bucket.t -= 30000; s.bucket.sum = vmoy * s.bucket.t; s.bucket.psum = p * s.bucket.t; }
-    }
-    s.ref = { t: d.tempsT, d: d.distT || 0, a: s.active, dist: s.dist, v: d.speed };
-    s.libere = false; s.aCorriger = true;       // affinage au prochain palier de 100 m
+    if (pMoy > 0) s.elev += dD * pMoy / 100;
+    s.pSum += pMoy * manque * 1000;
+    var vmoy = dD / manque * 3.6;                          // la vitesse max ne retient que ce qui a été mesuré
+    if (s.bucket.t > 0) { s.courbe.push(pointBucket(s.bucket)); s.bucket = { t: 0, sum: 0, psum: 0 }; }
+    for (var n = Math.max(1, Math.round(manque / 30)), i = 0; i < n; i++) s.courbe.push([Math.round(vmoy * 10) / 10, Math.round(pMoy * 2) / 2, 1]);
+    s.absences = (s.absences || 0) + 1;
+    s.ref = { t: d.tempsT, d: d.distT || 0, a: s.active, dist: s.dist, v: d.speed, p: d.incl || 0, at: now };
+    s.libere = false; if (!vitesseIdentique) s.aCorriger = true;
     Live.sauver();
   },
   /* Après une coupure (appli en arrière-plan…), les changements faits sur la console
@@ -542,8 +576,10 @@ var Live = {
   },
   restaurer: function () {
     var x = jget(LS.live, null);
-    if (!x || !profil || x.profil !== profil.id || Date.now() - x.savedAt > 3 * 3600 * 1000 || !x.s) { localStorage.removeItem(LS.live); return false; }
-    Live.s = x.s; Live.s.lastTick = Date.now(); Live.s.fini = false;
+    if (!x || !profil || x.profil !== profil.id || !x.s) return false;
+    Live.s = x.s; Live.s.lastTick = Date.now(); Live.s.fini = false; Live.s.decompte = false;
+    Live.s.restaureeAt = Date.now(); Live.s.restaureeDe = x.savedAt; Live.s.resync = true; Live.s.decoAt = Date.now(); Live.s.lastDistT = null;
+    if (Date.now() - x.savedAt > 6 * 3600 * 1000) { Live.fin('restauree'); return false; }   // très ancienne : on l'enregistre telle quelle
     clearInterval(Live.timer); Live.timer = setInterval(Live.tick, 500); wakeLock(true);
     return true;
   },
@@ -585,6 +621,19 @@ var Live = {
   },
   onDeco: function () { BLE.data.speed = 0; if (route.name === 'live') Live.render(); },
   kcal: function () { var s = Live.s; if (!s || s.kcalLast == null) return null; return Math.max(0, s.kcalAcc + s.kcalLast - (s.kcal0 || 0)); },
+  /* Le tapis a été arrêté pendant l'absence : ses compteurs sont perdus côté Bluetooth,
+     mais sa console affiche encore le bilan. On propose de le recopier. */
+  versSaisie: function () {
+    var s = Live.s; if (!s) return;
+    if (s.bucket.t >= 5000) s.courbe.push(pointBucket(s.bucket));
+    var pre = { debut: new Date(s.debut).toISOString(), duree: Math.round(s.active / 1000), distance: Math.round(s.dist),
+      kcal: Live.kcal(), denivele: Math.round(s.elev), perte: s.perte, type: s.type, programme: s.prog ? s.prog.nom : '' };
+    s.fini = true; clearInterval(Live.timer); wakeLock(false); localStorage.removeItem(LS.live); fermerNotif();
+    Live.s = null;
+    jset(LS.saisie, { profil: profil.id, pre: pre });
+    go('saisie');
+  },
+  demandeFin: function () { if (Live.s && Live.s.debut) Live.s.finDemandee = Date.now(); else if (Live.s) { Live.annuler(); go('accueil'); } },
   demarrer: function () {
     var s = Live.s; if (!s || s.decompte) return;
     if (!BLE.connected) { toast('Connecte d\'abord le tapis.'); return; }
@@ -618,16 +667,19 @@ var Live = {
     if (raison !== 'tapis' && BLE.connected && (BLE.data.speed > 0 || s.paused)) tapisStop();
     if (s.bucket.t >= 5000) s.courbe.push(pointBucket(s.bucket));
     var duree = Math.round(s.active / 1000);
-    if (duree < 30) { Live.s = null; toast('Séance trop courte : elle n\'est pas enregistrée.'); go('accueil'); return; }
+    if (s.perte) { s.fini = false; Live.versSaisie(); return; }        // une partie a été perdue : on fait recopier le bilan
+    if (duree < 30 && s.dist < 50) { Live.s = null; toast('Séance trop courte : elle n\'est pas enregistrée.'); go('accueil'); return; }
     var row = {
       id: uid(), debut: new Date(s.debut).toISOString(), type: s.type, programme: s.prog ? s.prog.nom : '',
       duree: duree, distance: Math.round(s.dist), kcal: Live.kcal(), denivele: Math.round(s.elev),
-      vmax: Math.round(s.vmax * 10) / 10, vmoy: Math.round(s.dist / (s.active / 1000) * 3.6 * 10) / 10,
-      penteMoy: Math.round(s.pSum / s.active * 10) / 10,
+      vmax: Math.round(s.vmax * 10) / 10, vmoy: duree ? Math.round(s.dist / duree * 3.6 * 10) / 10 : 0,
+      penteMoy: s.active ? Math.round(s.pSum / s.active * 10) / 10 : 0,
       fcMoy: s.hrN ? Math.round(s.hrSum / s.hrN) : null, fcMax: s.hrMax || null,
       courbe: s.courbe, changements: s.changes, majLe: new Date().toISOString()
     };
     commit({ op: 'put', t: 'Seances', row: row });
+    if (s.perte) ui.perte[row.id] = s.perte;
+    fermerNotif();
     Live.s = null;
     go('fin', { id: row.id });
   },
@@ -641,7 +693,7 @@ var Live = {
     else { $('lvHrL').textContent = 'Dénivelé'; $('lvHr').innerHTML = Math.round(s.elev) + '<small style="font-size:13px;color:var(--muted)"> m</small>'; $('lvHr').style.color = ''; }
     Live.majConsignes();
     var al = $('lvAlerte');
-    if (al) al.innerHTML = s.arreteAbsent ? '<div class="banner warn"><span>Le tapis a été arrêté pendant que l\'appli était en arrière-plan : la fin de la séance n\'a pas pu être récupérée. Touche Terminer pour enregistrer le reste.</span></div>' : '';
+    if (al) al.innerHTML = s.finDemandee ? '<div class="banner warn"><span>Enregistrement de la séance…</span></div>' : '';
     $('lvDist').textContent = km(s.dist, 2);
     var frac, sub;
     if (s.type === 'pilote') {
@@ -744,7 +796,7 @@ function versEtapes(changes, duree) {
 
 /* ---------- Navigation ---------- */
 var route = { name: 'profil', params: {} };
-var ui = { profilSel: null, retenir: true, resume: { mode: 'semaine', ref: new Date() }, modeleSauve: {}, nomModele: {} };
+var ui = { profilSel: null, retenir: true, resume: { mode: 'semaine', ref: new Date() }, modeleSauve: {}, nomModele: {}, perte: {}, graphe: {} };
 function go(name, params) { route = { name: name, params: params || {} }; render(); window.scrollTo(0, 0); }
 var TABS = [['accueil', 'Accueil', ICON.home], ['seances', 'Séances', ICON.play], ['resume', 'Résumé', ICON.chart], ['reglages', 'Profil', ICON.user]];
 function render() {
@@ -895,14 +947,41 @@ var SCREENS = {
     var sauve = ui.modeleSauve[x.id];
     return '<div class="stack">' +
       '<div style="padding-top:10px"><p class="muted">' + esc(dateLongue(x.debut)) + ' · ' + heure(x.debut) + '</p><h1 style="margin-top:4px">Bravo ' + profil.nom + '&nbsp;!</h1></div>' +
+      (ui.perte[x.id] ? '<div class="banner warn"><span>Le tapis a été arrêté pendant que l\'appli était en arrière-plan : ce qui a été couru après ' + heure(ui.perte[x.id]) + ' n\'a pas pu être récupéré. La prochaine fois, touche « Terminer et enregistrer » dans la notification avant d\'arrêter le tapis.</span></div>' : '') +
       statsSeance(x) +
       '<div class="row small muted">' + puceSauvegarde() + '</div>' +
       (peutModele ? (sauve ? '<div class="card"><h2>Modèle enregistré</h2><p class="small muted" style="margin-top:4px">Retrouve-le dans Séances › Mes modèles : le tapis refera les mêmes changements tout seul.</p></div>'
         : '<div class="card stack" style="gap:10px"><div><h2>Enregistrer comme modèle&nbsp;?</h2><p class="small muted" style="margin-top:4px">L\'appli a noté ' + versEtapes(x.changements, x.duree).length + ' réglages de vitesse et de pente. La prochaine fois, le tapis les refera tout seul.</p></div>' +
-          '<div class="bars" style="height:44px">' + barresEtapes(versEtapes(x.changements, x.duree), -1, 44) + '</div>' +
+          listeEtapes(versEtapes(x.changements, x.duree)) +
           '<input type="text" id="nomModele" maxlength="40" placeholder="Nom du modèle" value="' + esc(ui.nomModele[x.id] != null ? ui.nomModele[x.id] : 'Ma séance du ' + dateCourte(x.debut)) + '">' +
           '<button data-act="save-modele" data-id="' + esc(x.id) + '">Enregistrer comme modèle</button></div>') : '') +
       '<button class="primary big full" data-act="tab" data-to="accueil">Retour à l\'accueil</button></div>';
+  },
+
+  saisie: function () {
+    var x = jget(LS.saisie, null), pre = x && x.profil === profil.id ? x.pre : null;
+    var d = pre ? new Date(pre.debut) : new Date();
+    function champ(id, label, val, aide, mode) {
+      return '<div class="stack" style="gap:6px"><label for="' + id + '" style="font-weight:600">' + label + '</label>' +
+        '<input type="text" id="' + id + '" inputmode="' + (mode || 'decimal') + '" value="' + esc(val) + '" autocomplete="off">' +
+        (aide ? '<span class="small muted">' + aide + '</span>' : '') + '</div>';
+    }
+    var jour = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+    var hh = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+    return '<div class="stack">' + (pre ? '' : backBar('', 'resume')) +
+      '<div><h1>' + (pre ? 'Complète ta séance' : 'Ajouter une séance') + '</h1>' +
+      (pre ? '<p class="muted" style="margin-top:6px">Le tapis a été arrêté pendant que l\'appli était en arrière-plan : il a remis ses compteurs à zéro avant que l\'appli puisse les lire. Recopie le bilan affiché par la console du tapis (temps, distance, calories) puis enregistre.</p>'
+           : '<p class="muted" style="margin-top:6px">Pour une séance faite sans le téléphone, ou une ancienne séance.</p>') + '</div>' +
+      '<div class="card stack" style="gap:14px">' +
+        '<div class="grid2"><div class="stack" style="gap:6px"><label for="sJour" style="font-weight:600">Jour</label><input type="date" id="sJour" value="' + jour + '" style="font:inherit;min-height:50px;border-radius:16px;border:1.5px solid var(--line);padding:0 12px;background:var(--card)"></div>' +
+        '<div class="stack" style="gap:6px"><label for="sHeure" style="font-weight:600">Heure</label><input type="time" id="sHeure" value="' + hh + '" style="font:inherit;min-height:50px;border-radius:16px;border:1.5px solid var(--line);padding:0 12px;background:var(--card)"></div></div>' +
+        champ('sDuree', 'Durée', pre ? mmss(pre.duree) : '', 'En minutes:secondes, par exemple 32:15', 'text') +
+        champ('sDist', 'Distance (km)', pre ? fr(pre.distance / 1000, 2) : '', pre ? 'L\'appli avait noté ' + km(pre.distance) + ' km avant l\'arrêt' : '') +
+        champ('sKcal', 'Calories', pre && pre.kcal ? Math.round(pre.kcal) : '', '', 'numeric') +
+        champ('sDen', 'Dénivelé (m, facultatif)', pre && pre.denivele ? pre.denivele : '', 'Distance × pente : 1 km à 5 % = 50 m', 'numeric') +
+      '</div>' +
+      '<button class="primary big full" data-act="save-saisie">Enregistrer la séance</button>' +
+      '<button class="white full" data-act="annuler-saisie">' + (pre ? 'Ne pas enregistrer' : 'Annuler') + '</button></div>';
   },
 
   detail: function (pr) {
@@ -963,7 +1042,7 @@ var SCREENS = {
         '<div class="tile"><div class="l">Calories</div><div class="v num">' + (kcal ? Math.round(kcal) : '–') + '</div></div></div>' +
       carteDenivele(dplus, dpPrev, groups, mois) +
       cal +
-      '<div class="stack" style="gap:10px"><h2>Séances</h2>' + (list.length ? list.sort(function (x, y) { return String(y.debut).localeCompare(String(x.debut)); }).map(seanceItem).join('') : '<div class="card empty">Aucune séance sur cette période.</div>') + '</div>' +
+      '<div class="stack" style="gap:10px"><div class="between"><h2>Séances</h2><button class="ghost" data-act="tab" data-to="saisie">+ Ajouter à la main</button></div>' + (list.length ? list.sort(function (x, y) { return String(y.debut).localeCompare(String(x.debut)); }).map(seanceItem).join('') : '<div class="card empty">Aucune séance sur cette période.</div>') + '</div>' +
       '</div>';
   },
 
@@ -1021,15 +1100,61 @@ function carteDenivele(dp, dpPrev, groups, mois) {
         : '<p class="small muted" style="margin-top:8px">Mets de la pente pendant tes séances pour faire grimper ce compteur.</p>') + '</div>';
 }
 function statsSeance(x) {
+  var duree = Number(x.duree) || 0, dist = Number(x.distance) || 0;
+  var allureMoy = duree && dist > 20 ? allure(dist / duree * 3.6) : '–';     // toujours cohérente avec distance et durée
   var tiles = [
-    ['Distance', km(x.distance) + ' <small>km</small>'], ['Durée', mmss(x.duree)],
-    ['Allure moyenne', allure(x.vmoy)], ['Calories', x.kcal != null && x.kcal !== '' ? Math.round(x.kcal) : '–'],
-    ['Dénivelé', (x.denivele || 0) + ' <small>m</small>'], ['Vitesse max', fr(x.vmax || 0, 1) + ' <small>km/h</small>']
+    ['Distance', km(dist) + ' <small>km</small>'], ['Durée', mmss(duree)],
+    ['Allure moyenne', allureMoy + (allureMoy !== '–' ? ' <small>/km</small>' : '')], ['Calories', x.kcal != null && x.kcal !== '' ? Math.round(x.kcal) : '–'],
+    ['Dénivelé', Math.round(x.denivele || 0) + ' <small>m</small>'], ['Vitesse max', fr(Number(x.vmax) || 0, 1) + ' <small>km/h</small>']
   ];
   if (x.fcMoy) tiles.push(['Cardio moyen', x.fcMoy + ' <small>bpm</small>'], ['Cardio max', x.fcMax + ' <small>bpm</small>']);
-  var c = x.courbe || [];
   return '<div class="grid2">' + tiles.map(function (t) { return '<div class="tile"><div class="l">' + t[0] + '</div><div class="v num">' + t[1] + '</div></div>'; }).join('') + '</div>' +
-    (c.length ? '<div class="card"><div class="small muted" style="font-weight:600;margin-bottom:10px">' + (aPente(c) ? 'Vitesse et pente' : 'Vitesse') + ' au fil de la séance</div><div class="bars" style="height:90px">' + barresCourbe(c, 90, false) + '</div>' + legende(aPente(c)) + '</div>' : '');
+    grapheSeance(x);
+}
+/* Graphique de séance : barres = vitesse moyenne par tranche de 30 s, ligne = pente,
+   axes gradués, heures en bas, maximum signalé, détail au toucher. */
+function grapheSeance(x) {
+  var c = x.courbe || []; if (!c.length) return '';
+  ui.graphe[x.id] = c;
+  var H = 130, n = c.length, pas = (Number(x.duree) || n * 30) / n;
+  var mesures = c.map(function (pt) { return Array.isArray(pt) && pt[2] ? -1 : ptV(pt); });
+  var vmaxPts = Math.max.apply(null, mesures), iMax = mesures.indexOf(vmaxPts);
+  var echelle = Math.max(6, Math.ceil(Math.max.apply(null, c.map(ptV)) / 2) * 2);
+  var pente = aPente(c), absence = c.some(function (pt) { return Array.isArray(pt) && pt[2]; });
+  var bars = c.map(function (pt, i) {
+    var v = ptV(pt), abs = Array.isArray(pt) && pt[2];
+    var fond = abs ? 'repeating-linear-gradient(135deg,var(--acc-pale) 0 4px,#fff 4px 7px)' : i === iMax ? 'var(--acc-ring)' : 'var(--acc-pale)';
+    return '<button type="button" data-act="pt" data-id="' + esc(x.id) + '" data-i="' + i + '" aria-label="Détail à ' + mmss(i * pas) + '" ' +
+      'style="flex:1 1 0;min-width:2px;min-height:0;height:' + Math.max(3, Math.round(v / echelle * H)) + 'px;padding:0;border-radius:4px 4px 0 0;background:' + fond + '"></button>';
+  }).join('') + lignePente(c.map(function (pt) { return { w: 1, p: ptP(pt) }; }));
+  var etiqMax = vmaxPts > 0 ? '<div class="num" style="position:absolute;left:' + ((iMax + 0.5) / n * 100) + '%;bottom:' + (Math.round(vmaxPts / echelle * H) + 4) + 'px;transform:translateX(-50%);font-size:11px;font-weight:700;color:var(--acc-ink);white-space:nowrap;pointer-events:none">max ' + fr(vmaxPts, 1) + '</div>' : '';
+  var grille = 'background:linear-gradient(var(--line),var(--line)) 0 0/100% 1px no-repeat,linear-gradient(var(--line),var(--line)) 0 50%/100% 1px no-repeat;';
+  var axeG = '<div class="num" style="display:flex;flex-direction:column;justify-content:space-between;height:' + H + 'px;font-size:11px;color:var(--muted);text-align:right;margin-top:-6px;margin-bottom:6px"><span>' + echelle + '</span><span>' + (echelle / 2) + '</span><span>0</span></div>';
+  var axeD = pente ? '<div class="num" style="display:flex;flex-direction:column;justify-content:space-between;height:' + H + 'px;font-size:11px;color:' + COUL_PENTE + ';margin-top:-6px;margin-bottom:6px"><span>10 %</span><span>5 %</span><span>0</span></div>' : '<div></div>';
+  var t = Number(x.duree) || n * 30;
+  var axeX = '<div class="num between" style="font-size:11px;color:var(--muted);margin-top:4px"><span>0:00</span><span>' + mmss(t / 2) + '</span><span>' + mmss(t) + '</span></div>';
+  return '<div class="card"><div class="between" style="margin-bottom:12px"><strong style="font-size:15px">' + (pente ? 'Vitesse et pente' : 'Vitesse') + ' au fil de la séance</strong><span class="small muted">km/h</span></div>' +
+    '<div style="display:grid;grid-template-columns:22px minmax(0,1fr) ' + (pente ? '34px' : '0') + ';gap:6px;align-items:end">' + axeG +
+    '<div><div class="bars" style="height:' + H + 'px;gap:2px;' + grille + '">' + bars + etiqMax + '</div>' + axeX + '</div>' + axeD + '</div>' +
+    '<p class="small" id="grInfo-' + esc(x.id) + '" style="margin-top:10px;min-height:20px;color:var(--ink)"><span class="muted">Touche une barre pour voir le détail.</span></p>' +
+    '<div class="row small muted" style="gap:14px;flex-wrap:wrap;font-size:12px"><span class="row" style="gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:var(--acc-pale)"></span>Vitesse (moyenne par 30 s)</span>' +
+    (pente ? '<span class="row" style="gap:6px"><span style="width:14px;height:3px;border-radius:2px;background:' + COUL_PENTE + '"></span>Pente</span>' : '') +
+    (absence ? '<span class="row" style="gap:6px"><span style="width:10px;height:10px;border-radius:3px;background:repeating-linear-gradient(135deg,var(--acc-pale) 0 3px,#fff 3px 5px)"></span>Appli en arrière-plan (moyenne)</span>' : '') + '</div></div>';
+}
+function infoPoint(id, i) {
+  var c = ui.graphe[id], x = DB.seances.filter(function (r) { return r.id === id; })[0]; if (!c || !x) return;
+  var pt = c[i], pas = (Number(x.duree) || c.length * 30) / c.length, p = ptP(pt), abs = Array.isArray(pt) && pt[2];
+  var el = $('grInfo-' + id); if (!el) return;
+  el.innerHTML = '<strong class="num">' + mmss(i * pas) + ' – ' + mmss(Math.min((i + 1) * pas, x.duree || (i + 1) * pas)) + '</strong> · ' + fr(ptV(pt), 1) + ' km/h · allure ' + allure(ptV(pt)) +
+    (p != null ? ' · pente ' + fr(p, 1) + ' %' : '') + (abs ? ' <span class="muted">(moyenne, appli en arrière-plan)</span>' : '');
+}
+/* Résumé lisible des réglages d'un futur modèle (remplace le second graphique). */
+function listeEtapes(et) {
+  var t = 0;
+  return '<div style="display:flex;flex-direction:column;gap:2px">' + et.slice(0, 8).map(function (e) {
+    var l = '<div class="between small" style="padding:6px 0;border-bottom:1px solid var(--line)"><span class="num muted">' + mmss(t) + '</span><span class="num"><strong>' + fr(e.v, 1) + ' km/h</strong> · pente ' + fr(e.p || 0, 1) + ' % · ' + mmss(e.d) + '</span></div>';
+    t += e.d; return l;
+  }).join('') + (et.length > 8 ? '<div class="small muted">… et ' + (et.length - 8) + ' autres réglages</div>' : '') + '</div>';
 }
 
 /* ---------- Actions ---------- */
@@ -1059,9 +1184,31 @@ document.addEventListener('click', function (ev) {
       break;
     }
     case 'tab': go(el.dataset.to); break;
+    case 'pt': infoPoint(el.dataset.id, Number(el.dataset.i)); break;
+    case 'save-saisie': {
+      var x = jget(LS.saisie, null), pre = x && x.profil === profil.id ? x.pre : null;
+      var num = function (id) { var v = ($(id).value || '').trim().replace(',', '.'); return v === '' ? null : Number(v); };
+      var dm = ($('sDuree').value || '').trim().split(/[:h']/), duree = dm.length > 1 ? Number(dm[0]) * 60 + Number(dm[1] || 0) : Number((dm[0] || '').replace(',', '.')) * 60;
+      var dist = num('sDist');
+      if (!(duree > 0) || !(dist > 0)) { toast('Indique au moins la durée et la distance.'); return; }
+      var deb = new Date(($('sJour').value || '') + 'T' + ($('sHeure').value || '12:00'));
+      if (isNaN(deb)) deb = new Date();
+      var vm = Math.round(dist / (duree / 3600) * 10) / 10;
+      var row = { id: uid(), debut: deb.toISOString(), type: pre ? pre.type : 'manuel',
+        programme: pre ? (pre.programme || 'Course libre') : 'Saisie à la main', duree: Math.round(duree), distance: Math.round(dist * 1000),
+        kcal: num('sKcal'), denivele: num('sDen') || 0, vmax: vm, vmoy: vm, penteMoy: null, fcMoy: null, fcMax: null,
+        courbe: [], changements: [], majLe: new Date().toISOString() };
+      commit({ op: 'put', t: 'Seances', row: row });
+      localStorage.removeItem(LS.saisie);
+      go('fin', { id: row.id });
+      break;
+    }
+    case 'annuler-saisie':
+      if (jget(LS.saisie, null) && !confirm('Ne pas enregistrer cette séance ?')) return;
+      localStorage.removeItem(LS.saisie); go('accueil'); break;
     case 'connect': bleConnecter(true); break;
     case 'connect-new': BLE.manuel = true; if (BLE.device && BLE.device.gatt.connected) BLE.device.gatt.disconnect(); BLE.manuel = false; bleConnecter(true).then(function () { render(); }); break;
-    case 'libre': Live.nouvelle({ type: 'libre' }); go('live'); if (!BLE.connected) bleConnecter(false); break;
+    case 'libre': demanderNotif(); Live.nouvelle({ type: 'libre' }); go('live'); if (!BLE.connected) bleConnecter(false); break;
     case 'prep': go('prep', { id: id }); break;
     case 'off': {
       var k = LS.offset(profil.id, route.params.id), v = clamp(jget(k, 0) + Number(el.dataset.d), -3, 4);
@@ -1069,6 +1216,7 @@ document.addEventListener('click', function (ev) {
     }
     case 'go-pilote': {
       var p = trouverProg(id); if (!p) return;
+      demanderNotif();
       Live.nouvelle({ type: 'pilote', prog: { id: p.id, nom: p.nom, etapes: p.etapes }, offset: jget(LS.offset(profil.id, p.id), 0) });
       go('live');
       if (BLE.connected) Live.demarrer(); else bleConnecter(false);
@@ -1122,7 +1270,12 @@ document.addEventListener('input', function (ev) { if (ev.target.id === 'nomMode
 chargerProfil();
 if (profil) {
   chargerDB(); route = { name: 'accueil', params: {} };
-  if (Live.restaurer()) { route = { name: 'live', params: {} }; setTimeout(function () { toast('Séance en cours reprise.'); }, 300); }
+  if (Live.restaurer()) {
+    route = { name: 'live', params: {} };
+    if (/[?&]terminer=1/.test(location.search)) Live.demandeFin(); else setTimeout(function () { toast('Séance en cours reprise.'); }, 300);
+  }
+  var sa = jget(LS.saisie, null); if (sa && sa.profil === profil.id && route.name !== 'live') route = { name: 'saisie', params: {} };
+  if (location.search) history.replaceState(null, '', location.pathname);
 }
 render();
 if (profil) { flush(); bleConnecter(false); }

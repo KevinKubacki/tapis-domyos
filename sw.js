@@ -1,5 +1,5 @@
 // Changer VERSION à chaque livraison : les téléphones installent la nouvelle version et l'appli se recharge seule.
-var VERSION = 'tapis-domyos-2026-10-09-3';
+var VERSION = 'tapis-domyos-2026-10-13-1';
 var FILES = ['./', 'index.html', 'app.js', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(VERSION).then(function (c) { return c.addAll(FILES.map(function (f) { return new Request(f, { cache: 'reload' }); })); })
@@ -22,5 +22,16 @@ self.addEventListener('fetch', function (e) {
       return fetch(req).then(function (res) { if (res.ok || res.type === 'opaque') c.put(req, res.clone()); return res; })
         .catch(function () { return local ? c.match('index.html') : Response.error(); });
     });
+  }));
+});
+
+// Notification « Séance en cours » : revenir dans l'appli, ou terminer et enregistrer.
+self.addEventListener('notificationclick', function (e) {
+  var terminer = e.action === 'terminer';
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (list) {
+    var c = list[0];
+    if (c) { if (terminer) c.postMessage({ terminer: true }); return c.focus(); }
+    return self.clients.openWindow(terminer ? './?terminer=1' : './');
   }));
 });
